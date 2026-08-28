@@ -1,0 +1,43 @@
+# Artefactos de compilacion
+build/
+bin/
+out/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.opendb
+
+# Salida del autodiagnostico y de las capturas
+selftest-report.txt
+shot-*.bmp
+
+# Cuenta local del usuario: no versionar
+cuenta.dat
+cuenta.dat.selftest-bak
+perfil.dat
+foto-perfil.bmp
+tomate.vault
+sesion.tomate
+biblioteca.dat
+juegos/
+juegos-test*/
+"Juegos descargados"/
+Juegos descargados/
+*.tomate
+voxrun*/
+*.t3*
+*.t4*
+*.t5*
+
+# Varios
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+Thumbs.db
