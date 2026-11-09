@@ -6811,6 +6811,28 @@ void SelfTest::update(Engine& engine, f64 dt) {
                       up.updateChangelog().empty(),
                       up.updateChangelog().c_str());
 
+                // --- al confirmarse el guardado, se salta solo a PRECIOS ---
+                //
+                // Lo que toca despues es siempre lo mismo: poner precio y
+                // subir. Dejar la seccion abierta obligaba a cerrarla a mano,
+                // y el mensaje de exito en pantalla hacia creer que ya estaba
+                // todo hecho.
+                std::snprintf(buf, sizeof(buf), "panel=%d, aviso='%s'",
+                              up.devOpenPanel(), up.devMessage().c_str());
+                check("Tras guardar bien, se abre PRECIOS solo",
+                      up.devOpenPanel() == 2, buf);   // 2 = kDevPrice
+                check("Y se dice que toca poner precio y subir",
+                      up.devMessage().find("precio") != std::string::npos,
+                      buf);
+                check("El aviso no es de error",
+                      !up.devMessageIsError(), buf);
+
+                // La carpeta se suelta: ya esta dentro de Ludora, y dejarla
+                // haria parecer que queda un guardado a medias.
+                check("La carpeta elegida se suelta al terminar",
+                      up.archiveFolderForTest().empty(),
+                      "queda carpeta pendiente");
+
                 // Limpieza.
                 if (!cat.empty() && cat[0].current())
                     DeleteFileW(cat[0].current()->archive.c_str());

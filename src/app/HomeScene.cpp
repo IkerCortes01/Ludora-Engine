@@ -5893,6 +5893,13 @@ void HomeScene::updateDev(Engine& engine, f64 dt) {
     if (m_devPanel == kDevUpdate) {
         layoutDevUpdate(m_devPanelRect);
         updateDevUpdate(engine, dt);
+
+        // Al terminar un guardado, esa llamada cambia sola de mini-seccion.
+        // Si pasa, el frame acaba aqui: los bloques de abajo miran
+        // `m_devPanel` y atenderian la seccion NUEVA con la geometria de la
+        // vieja, que aun no se ha recalculado.
+        if (m_devPanel != kDevUpdate) return;
+
         // Solo se queda el evento si el raton esta DENTRO de su mini-seccion.
         // Con un return incondicional, los botones de la columna dejaban de
         // responder en cuanto se abria ACTUALIZAR JUEGO.
@@ -6121,28 +6128,32 @@ void HomeScene::updateDev(Engine& engine, f64 dt) {
     if (in.mouseReleased(0)) {
         if (m_devDown >= 0 && m_devDown == m_devHover) {
             // Cada boton abre su mini-seccion; volver a pulsarlo la cierra.
-            m_devPanel = (m_devPanel == m_devDown) ? kDevNone : m_devDown;
-            m_devMsg.clear();
-
-            // Al abrir Precios, el deslizador arranca en el precio guardado.
-            if (m_devPanel == kDevPrice && !m_devGames.empty()) {
-                m_priceT = static_cast<f32>(m_devGames.front().price.usdCents) /
-                           static_cast<f32>(devcatalog::kMaxUsdCents);
-                m_priceT = std::clamp(m_priceT, 0.0f, 1.0f);
-            }
-
-            // Al abrir SUBIR JUEGO, el formulario arranca con la ficha ya
-            // publicada: sin esto, reabrirlo mostraria campos en blanco y
-            // publicar otra vez pareceria crear un juego distinto.
-            if (m_devPanel == kDevUpload && m_upEditing.empty() &&
-                !m_devGames.empty()) {
-                const auto& g = m_devGames.front();
-                m_upNameField.setText(g.name);
-                loadListing(g.listing);
-                m_upEditing = g.name;
-            }
+            openDevPanel((m_devPanel == m_devDown) ? kDevNone : m_devDown);
         }
         m_devDown = -1;
+    }
+}
+
+void HomeScene::openDevPanel(i32 panel) {
+    m_devPanel = panel;
+    m_devMsg.clear();
+
+    // Al abrir Precios, el deslizador arranca en el precio guardado.
+    if (m_devPanel == kDevPrice && !m_devGames.empty()) {
+        m_priceT = static_cast<f32>(m_devGames.front().price.usdCents) /
+                   static_cast<f32>(devcatalog::kMaxUsdCents);
+        m_priceT = std::clamp(m_priceT, 0.0f, 1.0f);
+    }
+
+    // Al abrir SUBIR JUEGO, el formulario arranca con la ficha ya publicada:
+    // sin esto, reabrirlo mostraria campos en blanco y publicar otra vez
+    // pareceria crear un juego distinto.
+    if (m_devPanel == kDevUpload && m_upEditing.empty() &&
+        !m_devGames.empty()) {
+        const auto& g = m_devGames.front();
+        m_upNameField.setText(g.name);
+        loadListing(g.listing);
+        m_upEditing = g.name;
     }
 }
 
@@ -9470,6 +9481,35 @@ void HomeScene::pollArchive() {
     m_arcMsg     = buf;
     m_arcMsgErr  = false;
     m_arcDoneAnim = 1.6;   // el tic verde
+
+    // --- confirmado el guardado, la seccion se cierra sola ---
+    //
+    // Lo que toca despues de guardar los archivos es SIEMPRE lo mismo: poner
+    // precio y publicar. Dejar la seccion abierta obligaba a cerrarla a mano
+    // y acordarse del siguiente paso; peor aun, el mensaje de exito se quedaba
+    // en pantalla y era facil creer que ya estaba todo hecho.
+    //
+    // Se salta directamente a PRECIOS. El catalogo se relee ANTES de abrirlo
+    // porque el deslizador arranca en el precio guardado del juego: con la
+    // lista vieja, un juego recien publicado no estaria y el carril
+    // empezaria en cero en vez de en su precio.
+    m_devGames = devcatalog::load(kDevCatalogFile);
+    m_devGamesLoaded = true;
+    openDevPanel(kDevPrice);
+
+    // El aviso viaja con el: en PRECIOS se lee lo que acaba de pasar y por
+    // que se esta ahi, en vez de aparecer de golpe en otra seccion.
+    m_devMsg    = publicada
+                ? "Archivos publicados. Ahora pon el precio y sube el juego."
+                : "Archivos guardados. Ahora pon el precio y sube el juego.";
+    m_devMsgErr = false;
+
+    // La carpeta elegida se suelta: ya esta empaquetada y dentro de Ludora.
+    // Dejarla haria que volver a la seccion pareciera tener un guardado a
+    // medias pendiente.
+    m_arcFolder.clear();
+    m_arcFiles = 0;
+    m_arcBytes = 0;
 }
 
 void HomeScene::publishSavedVersion(const std::string& nombre, bool& publicada) {

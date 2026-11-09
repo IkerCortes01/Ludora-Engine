@@ -351,6 +351,8 @@ public:
         m_arcFolder = dir; m_arcFiles = files; m_arcBytes = bytes;
     }
     void  startArchiveForTest()    { startArchive(); }
+    /// Carpeta elegida que queda pendiente de guardar ("" si no hay).
+    const std::wstring& archiveFolderForTest() const { return m_arcFolder; }
     void  pollArchiveForTest()     { pollArchive(); }
     bool  archiveRunning() const   { return m_archive.running(); }
     const std::string& archiveMessage() const { return m_arcMsg; }
@@ -894,6 +896,13 @@ private:
     void drawDevUpdate(Framebuffer& fb, Recti area);
     void layoutDevUpdate(Recti area);
     void updateDevUpdate(Engine& engine, f64 dt);
+    /// Abre una mini-seccion del Modo Desarrollador (kDevNone la cierra) y
+    /// deja listo lo que esa seccion necesita: el deslizador en el precio
+    /// guardado, el formulario con la ficha ya publicada.
+    ///
+    /// Existe para que abrirla a mano y abrirla sola -- como hace el guardado
+    /// al terminar -- den exactamente el mismo estado.
+    void openDevPanel(i32 panel);
     /// Traduce el codigo resuelto al indicador de m_updFound.
     void lookupUpdateGame();
     /// Registra la version en el catalogo y el historial, tras empaquetarla.
