@@ -4675,6 +4675,96 @@ void SelfTest::update(Engine& engine, f64 dt) {
                 check("Shift+Ctrl+Derecha selecciona la palabra",
                       ed.text() == "esto entero", ed.text().c_str());
 
+                // --- repeticion automatica al dejar la tecla pulsada ---
+                //
+                // Sin esto, borrar treinta caracteres eran treinta
+                // pulsaciones: keyPressed solo salta en el flanco y mantener
+                // Supr no hacia absolutamente nada.
+                {
+                    Input rep;
+                    i32 veces = 0;
+
+                    // Se pulsa y se mantiene medio segundo a 60 fps.
+                    rep.onKey(VK_DELETE, true);
+                    for (i32 f = 0; f < 30; ++f) {
+                        rep.newFrame(1.0 / 60.0);
+                        if (rep.keyRepeat(VK_DELETE)) ++veces;
+                    }
+                    std::snprintf(buf, sizeof(buf),
+                                  "%d repeticiones en medio segundo", veces);
+                    // Con 0.45 s de espera y 0.035 s de ritmo, en 0.5 s
+                    // caben el disparo inicial y un punado mas.
+                    check("Mantener una tecla la repite sola",
+                          veces >= 2, buf);
+
+                    // Soltarla corta la repeticion.
+                    rep.onKey(VK_DELETE, false);
+                    rep.newFrame(1.0 / 60.0);
+                    check("Al soltarla deja de repetirse",
+                          !rep.keyRepeat(VK_DELETE), "");
+
+                    // Una pulsacion corta cuenta UNA sola vez: si no,
+                    // escribir normal borraria de mas.
+                    Input corto;
+                    i32 vecesCorto = 0;
+                    corto.onKey(VK_BACK, true);
+                    for (i32 f = 0; f < 6; ++f) {   // 0.1 s, menos que la espera
+                        corto.newFrame(1.0 / 60.0);
+                        if (corto.keyRepeat(VK_BACK)) ++vecesCorto;
+                    }
+                    std::snprintf(buf, sizeof(buf), "%d veces", vecesCorto);
+                    check("Una pulsacion corta cuenta una sola vez",
+                          vecesCorto == 1, buf);
+                }
+
+                // --- doble y triple clic ---
+                //
+                // Doble selecciona la palabra, triple la linea. Se comprueba
+                // borrando: lo que desaparece dice que habia seleccionado.
+                {
+                    TextField cl;
+                    cl.setStyle(ml);
+                    cl.setRect({ 0, 0, 400, 120 });
+                    cl.setMaxLength(10000);
+                    cl.setFocused(true);
+                    cl.setText("hola mundo cruel");
+
+                    // El reloj del campo avanza con update(): hace falta para
+                    // fechar los clics.
+                    cl.update(0.016);
+                    // Dos clics seguidos sobre "mundo" (misma posicion).
+                    const i32 cx = 8 + font5x7::measureUtf8("hola mu", 1);
+                    cl.onMouseDown(cx, 10);
+                    cl.update(0.016);
+                    cl.onMouseDown(cx, 10);
+                    cl.onKey(VK_BACK, false, false);
+                    check("Doble clic selecciona la palabra",
+                          cl.text() == "hola  cruel", cl.text().c_str());
+
+                    // Triple clic: la linea entera.
+                    cl.setText("primera linea\nsegunda linea");
+                    cl.update(0.016);
+                    cl.onMouseDown(20, 10);
+                    cl.update(0.016);
+                    cl.onMouseDown(20, 10);
+                    cl.update(0.016);
+                    cl.onMouseDown(20, 10);
+                    cl.onKey(VK_BACK, false, false);
+                    check("Triple clic selecciona la linea entera",
+                          cl.text() == "\nsegunda linea", cl.text().c_str());
+
+                    // Dos clics separados en el tiempo NO son un doble.
+                    cl.setText("hola mundo");
+                    cl.update(0.016);
+                    cl.onMouseDown(cx, 10);
+                    cl.update(1.0);               // pasa de sobra el plazo
+                    cl.onMouseDown(cx, 10);
+                    cl.onKey(VK_BACK, false, false);
+                    check("Dos clics lentos no cuentan como doble",
+                          cl.text() != "hola  mundo" &&
+                          cl.text().size() == 9, cl.text().c_str());
+                }
+
                 // Un campo de una linea no se rompe con Arriba/Abajo.
                 TextField ul2;
                 ul2.setStyle(ul);

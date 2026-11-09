@@ -89,6 +89,20 @@ private:
     size_t lineStart(size_t desde) const;
     size_t lineEnd(size_t desde) const;
 
+    /// Ventana en la que dos clics cuentan como doble. Es la de Windows por
+    /// defecto; mas corta se escapan los dobles clics lentos, y mas larga
+    /// dos clics deliberados en el mismo sitio se funden en uno.
+    static constexpr f64 kDobleClic = 0.4;
+
+    /// Reloj propio del campo, en segundos. Lo adelanta update(), que ya
+    /// recibe el dt para el parpadeo del cursor.
+    f64    m_clockSec    = 0.0;
+    f64    m_lastClickAt = -1.0;   // cuando fue el ultimo clic
+    i32    m_lastClickX  = 0;      // y donde, para exigir que sea en el sitio
+    i32    m_lastClickY  = 0;
+    /// 1 = simple, 2 = palabra, 3 = linea. Se reinicia al alejarse o tardar.
+    i32    m_clicks      = 0;
+
     /// Texto tal y como se pinta (asteriscos si es contrasena).
     std::string visibleText() const;
     /// Indice de caracter mas cercano a una x en pixeles (una sola linea).

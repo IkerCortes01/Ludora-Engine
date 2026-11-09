@@ -12,7 +12,8 @@ public:
     static constexpr int kKeyCount = 256;
 
     /// Llamar al inicio de cada frame: copia el estado actual a "anterior".
-    void newFrame();
+    /// `dt` son los segundos del frame, para la repeticion automatica.
+    void newFrame(f64 dt = 0.0);
 
     // --- alimentado por el WndProc ---
     void onKey(u32 vk, bool down);
@@ -33,6 +34,17 @@ public:
     bool keyPressed(u32 vk)  const { return vk < kKeyCount &&  m_keys[vk] && !m_prevKeys[vk]; }
     bool keyReleased(u32 vk) const { return vk < kKeyCount && !m_keys[vk] &&  m_prevKeys[vk]; }
 
+    /// Como keyPressed, pero ADEMAS se repite sola si la tecla sigue
+    /// hundida, igual que en cualquier editor de texto.
+    ///
+    /// Sin esto, borrar treinta caracteres eran treinta pulsaciones: el
+    /// flanco solo salta una vez y mantener Supr no hacia nada.
+    ///
+    /// Los tiempos son los de Windows por defecto: una espera inicial para
+    /// que una pulsacion normal no dispare la repeticion, y luego un ritmo
+    /// rapido y constante.
+    bool keyRepeat(u32 vk) const { return vk < kKeyCount && m_repeat[vk]; }
+
     // --- consultas de raton (0 = izquierdo, 1 = derecho, 2 = medio) ---
     bool mouseDown(int b)    const { return b >= 0 && b < 3 && m_mouse[b]; }
     bool mousePressed(int b) const { return b >= 0 && b < 3 &&  m_mouse[b] && !m_prevMouse[b]; }
@@ -43,8 +55,19 @@ public:
     f32  wheelDelta() const { return m_wheel; }
 
 private:
+    /// Espera antes de empezar a repetir, y ritmo una vez arrancada. Son los
+    /// valores tipicos de Windows: por debajo, una pulsacion corta acabaria
+    /// borrando de mas.
+    static constexpr f64 kRepeatDelay = 0.45;   // segundos
+    static constexpr f64 kRepeatRate  = 0.035;  // segundos entre repeticiones
+
     std::array<bool, kKeyCount> m_keys{};
     std::array<bool, kKeyCount> m_prevKeys{};
+    /// true solo en los frames en que la tecla "cuenta" otra vez.
+    std::array<bool, kKeyCount> m_repeat{};
+    /// Cuanto lleva hundida cada tecla, y cuando toca la proxima repeticion.
+    std::array<f64, kKeyCount>  m_heldFor{};
+    std::array<f64, kKeyCount>  m_nextRepeat{};
     std::array<bool, 3> m_mouse{};
     std::array<bool, 3> m_prevMouse{};
 

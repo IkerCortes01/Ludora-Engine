@@ -13,6 +13,20 @@ constexpr i32 kPadX = 8;          // margen interior horizontal
 constexpr i32 kPadY = 6;          // margen superior cuando el texto va arriba
 constexpr f64 kBlinkPeriod = 1.0; // ciclo completo del cursor
 
+/// true si el caracter separa palabras. Lo que no es letra, digito ni guion
+/// bajo corta: es como se comporta cualquier editor al saltar con Ctrl o al
+/// seleccionar una palabra con doble clic.
+///
+/// Los bytes >= 0x80 cuentan como letra: son la continuacion de una
+/// acentuada o una enye en UTF-8, y tratarlos como separador partiria
+/// "mañana" por la mitad.
+bool esSeparadorChar(char c) {
+    const unsigned char u = static_cast<unsigned char>(c);
+    if (u >= 0x80) return false;
+    return !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+             (c >= '0' && c <= '9') || c == '_');
+}
+
 // Aqui habia un `advance(scale)` con un paso fijo por caracter, heredado de
 // cuando la fuente era bitmap y monoespaciada. La del sistema es proporcional:
 // cada letra se mide con font5x7::measureUtf8 y la pluma avanza con ese ancho.
@@ -268,34 +282,21 @@ void TextField::onChar(wchar_t c) {
     m_blink = 0.0;
 }
 
-namespace {
-
-/// true si el caracter separa palabras. Lo que no es letra ni digito corta:
-/// es como se comporta cualquier editor al saltar con Ctrl.
-bool esSeparador(char c) {
-    const unsigned char u = static_cast<unsigned char>(c);
-    if (u >= 0x80) return false;   // acentuadas y enye cuentan como letra
-    return !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-             (c >= '0' && c <= '9') || c == '_');
-}
-
-} // namespace
-
 size_t TextField::wordLeft(size_t desde) const {
     // Primero se saltan los separadores que haya justo detras, y luego la
     // palabra entera: con una sola pasada, Ctrl+Izquierda sobre " hola" se
     // quedaba en el espacio en vez de llegar al principio de la palabra.
     size_t i = desde;
-    while (i > 0 && esSeparador(m_text[byteOfChar(i - 1)])) --i;
-    while (i > 0 && !esSeparador(m_text[byteOfChar(i - 1)])) --i;
+    while (i > 0 && esSeparadorChar(m_text[byteOfChar(i - 1)])) --i;
+    while (i > 0 && !esSeparadorChar(m_text[byteOfChar(i - 1)])) --i;
     return i;
 }
 
 size_t TextField::wordRight(size_t desde) const {
     const size_t n = charCount();
     size_t i = desde;
-    while (i < n && !esSeparador(m_text[byteOfChar(i)])) ++i;
-    while (i < n && esSeparador(m_text[byteOfChar(i)])) ++i;
+    while (i < n && !esSeparadorChar(m_text[byteOfChar(i)])) ++i;
+    while (i < n && esSeparadorChar(m_text[byteOfChar(i)])) ++i;
     return i;
 }
 
@@ -436,7 +437,45 @@ void TextField::onKey(u32 vk, bool shift, bool ctrl) {
 }
 
 void TextField::onMouseDown(i32 x, i32 y) {
-    m_caret = m_selAnchor = indexFromPoint(x, y);
+    const size_t idx = indexFromPoint(x, y);
+
+    // --- doble y triple clic ---
+    //
+    // Dos clics seguidos y cerca seleccionan la PALABRA; tres, la LINEA
+    // entera. Es como se selecciona texto en cualquier parte, y sin esto la
+    // unica via era arrastrar con precision sobre una fuente de 5 pixeles.
+    //
+    // El limite de tiempo es el del sistema, y el de distancia evita que dos
+    // clics en sitios distintos cuenten como doble por ir rapido.
+    const f64 ahora = m_clockSec;
+    const bool seguido = (ahora - m_lastClickAt) < kDobleClic &&
+                         std::abs(x - m_lastClickX) <= 4 &&
+                         std::abs(y - m_lastClickY) <= 4;
+    m_clicks = seguido ? (m_clicks + 1) : 1;
+    m_lastClickAt = ahora;
+    m_lastClickX = x;
+    m_lastClickY = y;
+
+    if (m_clicks >= 3) {
+        // Triple: la linea entera.
+        m_selAnchor = lineStart(idx);
+        m_caret     = lineEnd(idx);
+    } else if (m_clicks == 2) {
+        // Doble: la palabra bajo el cursor. wordLeft/wordRight saltan
+        // separadores, asi que aqui se acotan a la palabra en si.
+        const size_t n = charCount();
+        size_t i = idx;
+        while (i > 0 && !esSeparadorChar(m_text[byteOfChar(i - 1)])) --i;
+        size_t j = idx;
+        while (j < n && !esSeparadorChar(m_text[byteOfChar(j)])) ++j;
+        if (i == j) {           // se pulso sobre un separador: se coge el
+            if (j < n) ++j;     // propio separador, no una seleccion vacia
+        }
+        m_selAnchor = i;
+        m_caret     = j;
+    } else {
+        m_caret = m_selAnchor = idx;
+    }
     m_blink = 0.0;
 }
 
@@ -446,6 +485,11 @@ void TextField::onMouseDrag(i32 x, i32 y) {
 }
 
 void TextField::update(f64 dt) {
+    // El reloj corre SIEMPRE, tenga el foco o no: es el que fecha los clics,
+    // y si se parase al perder el foco, el primer clic al volver se tomaria
+    // como doble por tener la marca de tiempo congelada.
+    m_clockSec += dt;
+
     if (!m_focused) return;
     m_blink += dt;
     if (m_blink >= kBlinkPeriod) m_blink -= kBlinkPeriod;

@@ -129,8 +129,13 @@ int Engine::run(std::unique_ptr<Scene> scene) {
     // Precision de 1 ms para Sleep durante el bucle.
     timeBeginPeriod(1);
 
+    // Duracion del frame ANTERIOR: newFrame() la necesita para la repeticion
+    // automatica de teclas, y el reloj no se puede consultar antes de bombear
+    // los mensajes sin alterar el dt que recibe la escena.
+    f64 dtPrevio = 0.0;
+
     while (m_running) {
-        m_window.input().newFrame();
+        m_window.input().newFrame(dtPrevio);
 
         if (!m_window.pumpMessages() || m_window.shouldClose()) {
             m_running = false;
@@ -138,6 +143,7 @@ int Engine::run(std::unique_ptr<Scene> scene) {
         }
 
         const f64 dt = m_clock.tick();
+        dtPrevio = dt;
 
         if (m_scene) {
             m_scene->update(*this, dt);

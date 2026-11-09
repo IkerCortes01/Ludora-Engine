@@ -3914,7 +3914,7 @@ void HomeScene::updateDescriptionEditor(Engine& engine, f64 dt) {
     for (u32 vk : kEditKeys) {
         const bool isLetter = (vk == 'A' || vk == 'C' || vk == 'X' || vk == 'V');
         if (isLetter && !ctrlAtajo) continue;
-        if (in.keyPressed(vk)) m_descField.onKey(vk, shift, ctrlAtajo);
+        if (in.keyRepeat(vk)) m_descField.onKey(vk, shift, ctrlAtajo);
     }
     if (!ctrlAtajo) {
         for (wchar_t ch : in.charsTyped()) {
@@ -5953,7 +5953,7 @@ void HomeScene::updateDev(Engine& engine, f64 dt) {
                                    VK_HOME, VK_END, VK_UP, VK_DOWN,
                            'A', 'C', 'X', 'V' };
             for (const u32 vk : teclas)
-                if (in.keyPressed(vk)) m_priceTypeField.onKey(vk, shift, ctrlAtajo);
+                if (in.keyRepeat(vk)) m_priceTypeField.onKey(vk, shift, ctrlAtajo);
 
             for (const wchar_t ch : in.charsTyped()) {
                 if (ctrlAtajo || ch < 32) continue;
@@ -6739,7 +6739,7 @@ void HomeScene::updateEula(Engine& engine, f64 dt) {
                            VK_HOME, VK_END, VK_UP, VK_DOWN,
                            'A', 'C', 'X', 'V' };
     for (const u32 vk : teclas)
-        if (in.keyPressed(vk)) campo.onKey(vk, shift, ctrlAtajo);
+        if (in.keyRepeat(vk)) campo.onKey(vk, shift, ctrlAtajo);
 
     for (const wchar_t ch : in.charsTyped()) {
         if (ch < 32 && ch != '\r' && ch != '\n') continue;
@@ -6921,7 +6921,7 @@ void HomeScene::routeUploadKeys(Engine& engine) {
                            VK_HOME, VK_END, VK_UP, VK_DOWN,
                            'A', 'C', 'X', 'V' };
     for (const u32 vk : teclas)
-        if (in.keyPressed(vk)) campo->onKey(vk, shift, ctrlAtajo);
+        if (in.keyRepeat(vk)) campo->onKey(vk, shift, ctrlAtajo);
 
     for (const wchar_t ch : in.charsTyped()) {
         if (ctrlAtajo) continue;               // atajo, no texto
@@ -8607,7 +8607,7 @@ void HomeScene::updateAgeOptions(Engine& engine, f64 dt) {
                                VK_HOME, VK_END, VK_UP, VK_DOWN,
                            'A', 'C', 'X', 'V' };
         for (const u32 vk : teclas)
-            if (in.keyPressed(vk)) m_ageManualField.onKey(vk, shift, ctrl);
+            if (in.keyRepeat(vk)) m_ageManualField.onKey(vk, shift, ctrl);
         for (const wchar_t ch : in.charsTyped()) {
             if (ctrl || ch < 32) continue;
             m_ageManualField.onChar(ch);
@@ -9148,7 +9148,7 @@ void HomeScene::updateDevDelete(Engine& engine, f64 dt) {
                            VK_HOME, VK_END, VK_UP, VK_DOWN,
                            'A', 'C', 'X', 'V' };
     for (const u32 vk : teclas)
-        if (in.keyPressed(vk)) m_delCodeField.onKey(vk, shift, ctrlAtajo);
+        if (in.keyRepeat(vk)) m_delCodeField.onKey(vk, shift, ctrlAtajo);
 
     for (const wchar_t ch : in.charsTyped()) {
         if (ctrlAtajo || ch < 32) continue;
@@ -9620,7 +9620,7 @@ void HomeScene::updateDevFiles(Engine& engine, f64 dt) {
         }
 
         for (const u32 vk : teclas)
-            if (in.keyPressed(vk)) campo->onKey(vk, shift, ctrlAtajo);
+            if (in.keyRepeat(vk)) campo->onKey(vk, shift, ctrlAtajo);
 
         for (const wchar_t ch : in.charsTyped()) {
             if (ctrlAtajo) continue;
@@ -9646,7 +9646,7 @@ void HomeScene::updateDevFiles(Engine& engine, f64 dt) {
         m_arcCodeField.onMouseDrag(lx, ly);
 
     for (const u32 vk : teclas)
-        if (in.keyPressed(vk)) m_arcCodeField.onKey(vk, shift, ctrlAtajo);
+        if (in.keyRepeat(vk)) m_arcCodeField.onKey(vk, shift, ctrlAtajo);
 
     for (const wchar_t ch : in.charsTyped()) {
         if (ctrlAtajo || ch < 32) continue;
@@ -10232,7 +10232,7 @@ void HomeScene::updateDevCommunity(Engine& engine, f64 dt) {
                 campo->onMouseDrag(lx, ly);
 
             for (const u32 vk : teclas)
-                if (in.keyPressed(vk)) campo->onKey(vk, shift, ctrlAtajo);
+                if (in.keyRepeat(vk)) campo->onKey(vk, shift, ctrlAtajo);
 
             // En descripcion y reglas el Enter hace parrafo; el nombre es de
             // una linea y ahi un salto no significa nada.
