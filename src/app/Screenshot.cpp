@@ -255,10 +255,13 @@ void Screenshot::render(Engine& engine, Framebuffer& fb) {
         // Se registra un juego de prueba, se navega a Biblioteca y se
         // selecciona la primera casilla.
         {
+            // Juego de relleno para que la casilla tenga algo que mostrar. No
+            // es ningun juego real: inyectar uno de verdad ataba las capturas
+            // a que siguiera existiendo en la plataforma.
             library::Entry e;
-            e.name    = "Voxel World";
+            e.name    = "Juego de ejemplo";
             e.vault   = L"juegos\\_demo.tomate";   // no hace falta que exista
-            e.exeName = L"VoxelWorld.exe";
+            e.exeName = L"ejemplo.exe";
             library::add(L"biblioteca.dat", e);
 
             HomeScene h2("demo@ludora.engine");

@@ -109,6 +109,17 @@ bool Vault::randomBytes(std::vector<u8>& out, size_t n) {
                                 BCRYPT_USE_SYSTEM_PREFERRED_RNG));
 }
 
+bool Vault::aead(bool encrypt,
+                 const std::vector<u8>& key,
+                 const std::vector<u8>& nonce,
+                 const std::vector<u8>& in,
+                 std::vector<u8>& tag,
+                 std::vector<u8>& out) {
+    // Delega en la primitiva interna aesGcm(): mismo AES-256-GCM que usan las
+    // capas del Vault, expuesto para que el VFS cifre asset a asset.
+    return aesGcm(encrypt, key, nonce, in, tag, out);
+}
+
 bool Vault::deriveKey(const std::string& secret,
                       const std::vector<u8>& salt,
                       u32 iterations,
@@ -312,6 +323,110 @@ bool Vault::open(const std::string& secret,
     return true;
 }
 
+Vault::OpenResult Vault::openDetailed(const std::string& secret,
+                                      const std::vector<u8>& blob,
+                                      std::vector<u8>& out,
+                                      std::string& error) {
+    // Se distingue ANTES de intentar descifrar: un blob sin forma valida no
+    // es un secreto equivocado, es un archivo roto o sustituido.
+    constexpr size_t kHeadBytes = 16;
+    const     size_t kHeadTotal = kHeadBytes + kSaltBytes;
+
+    if (blob.size() < kHeadTotal || readU32(&blob[0]) != kMagic) {
+        error = "Archivo cifrado ilegible.";
+        return OpenResult::Corrupt;
+    }
+
+    const u32 version = readU32(&blob[4]);
+    const u32 layers  = readU32(&blob[8]);
+    if (version != kVersion || layers == 0 || layers > 64) {
+        error = "Archivo cifrado ilegible.";
+        return OpenResult::Corrupt;
+    }
+
+    if (open(secret, blob, out, error)) return OpenResult::Ok;
+
+    // Llegados aqui la cabecera era valida pero el descifrado fallo. Con un
+    // AEAD no hay forma de distinguir "clave mala" de "datos alterados" sin
+    // filtrar informacion, asi que se trata como manipulacion: es la
+    // suposicion prudente, y el guardian lo registra como tal.
+    return OpenResult::Tampered;
+}
+
+bool Vault::rotate(const std::string& secret,
+                   const std::vector<u8>& blob,
+                   std::vector<u8>& out,
+                   std::string& error) {
+    // Abrir y volver a sellar. El contenido es el mismo; los salts, nonces y
+    // claves de cada capa son nuevos, porque seal() los genera frescos.
+    std::vector<u8> claro;
+    if (!open(secret, blob, claro, error)) return false;
+
+    const bool ok = seal(secret, claro, out, error);
+
+    // El contenido en claro no debe quedar en RAM mas de lo necesario.
+    if (!claro.empty()) SecureZeroMemory(claro.data(), claro.size());
+    return ok;
+}
+
+// --------------------------------------------------------------- guardian ---
+
+i32       VaultGuard::s_fails      = 0;
+long long VaultGuard::s_lockedUntil = 0;
+bool      VaultGuard::s_tamper     = false;
+
+namespace {
+/// Segundos desde epoch, para medir la duracion del bloqueo.
+long long guardNow() {
+    FILETIME ft{};
+    GetSystemTimeAsFileTime(&ft);
+    const u64 t = (static_cast<u64>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+    return static_cast<long long>(t / 10000000ULL) - 11644473600LL;
+}
+} // namespace
+
+bool VaultGuard::note(Vault::OpenResult r) {
+    if (r == Vault::OpenResult::Ok) {
+        // Una apertura correcta limpia los fallos, pero NO borra el hecho de
+        // que se vio manipulacion: un archivo alterado no vuelve a ser de
+        // fiar porque el siguiente intento funcione.
+        s_fails = 0;
+        return !locked();
+    }
+
+    ++s_fails;
+    if (r == Vault::OpenResult::Tampered || r == Vault::OpenResult::Corrupt)
+        s_tamper = true;
+
+    // Manipulacion detectada: se corta el acceso de inmediato, sin esperar a
+    // agotar los intentos. Es justo la "actividad no identificada" que hay
+    // que atajar en cuanto aparece.
+    if (s_tamper || s_fails >= kMaxFails) {
+        s_lockedUntil = guardNow() + kLockSeconds;
+        return false;
+    }
+    return true;
+}
+
+bool VaultGuard::locked() {
+    return guardNow() < s_lockedUntil;
+}
+
+long long VaultGuard::lockRemaining() {
+    const long long q = s_lockedUntil - guardNow();
+    return q > 0 ? q : 0;
+}
+
+i32 VaultGuard::failCount() { return s_fails; }
+
+void VaultGuard::reset() {
+    s_fails       = 0;
+    s_lockedUntil = 0;
+    s_tamper      = false;
+}
+
+bool VaultGuard::tamperSeen() { return s_tamper; }
+
 bool Vault::saveFile(const std::wstring& path, const std::vector<u8>& blob) {
     std::ofstream f(path.c_str(), std::ios::binary);
     if (!f) return false;
@@ -328,7 +443,14 @@ bool Vault::loadFile(const std::wstring& path, std::vector<u8>& blob) {
     f.seekg(0, std::ios::beg);
     blob.assign(static_cast<size_t>(n), 0);
     f.read(reinterpret_cast<char*>(blob.data()), n);
-    return f.good();
+
+    // Se comprueban los BYTES LEIDOS, no `good()`.
+    //
+    // Un read() que consume el archivo hasta el final deja puesto el bit de
+    // fin de fichero, y entonces good() devuelve false aunque la lectura
+    // haya sido perfecta. El sintoma era un "No se encontro el paquete" en
+    // archivos que estaban ahi y enteros.
+    return f.gcount() == n;
 }
 
 } // namespace ludora

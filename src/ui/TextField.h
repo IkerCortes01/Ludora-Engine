@@ -30,6 +30,9 @@ public:
     void clear();
 
     bool focused() const                  { return m_focused; }
+    /// Posicion del cursor, en caracteres. La usan las pruebas para comprobar
+    /// donde cae un clic.
+    size_t caretIndex() const             { return m_caret; }
     void setFocused(bool on);
 
     bool contains(i32 x, i32 y) const;
@@ -60,6 +63,16 @@ public:
         Color caret;
         Color selection;
         i32   textScale = 2;
+        /// Pega el texto al BORDE SUPERIOR en vez de centrarlo en vertical.
+        /// En un campo de una linea centrar es lo correcto; en una caja alta
+        /// (descripcion, bloques del EULA) el texto debe empezar arriba, que
+        /// es donde se espera al escribir.
+        bool  alignTop = false;
+        /// Reparte el texto en VARIAS lineas: corta en los saltos de linea y
+        /// ademas ajusta al ancho del campo. Sin esto, todo se dibuja en una
+        /// sola fila con desplazamiento lateral, que es lo correcto para un
+        /// campo de una linea pero inservible para un reglamento.
+        bool  multiline = false;
     };
     void setStyle(const Style& s) { m_style = s; }
 
@@ -69,11 +82,20 @@ private:
     // partir un caracter por la mitad al borrar o al seleccionar.
     size_t byteOfChar(size_t charIdx) const;
     size_t charCount() const;
+    /// Limites de palabra y de linea, para los saltos con Ctrl y las teclas
+    /// Inicio/Fin/Arriba/Abajo. Trabajan en indices de CARACTER, no de byte.
+    size_t wordLeft(size_t desde) const;
+    size_t wordRight(size_t desde) const;
+    size_t lineStart(size_t desde) const;
+    size_t lineEnd(size_t desde) const;
 
     /// Texto tal y como se pinta (asteriscos si es contrasena).
     std::string visibleText() const;
-    /// Indice de caracter mas cercano a una x en pixeles.
+    /// Indice de caracter mas cercano a una x en pixeles (una sola linea).
     size_t indexFromX(i32 x) const;
+    /// Igual, teniendo en cuenta la fila: es lo que usa el modo multilinea.
+    /// En modo de una linea delega en indexFromX.
+    size_t indexFromPoint(i32 x, i32 y) const;
     /// x en pixeles del inicio del caracter idx.
     i32 xFromIndex(size_t idx) const;
 

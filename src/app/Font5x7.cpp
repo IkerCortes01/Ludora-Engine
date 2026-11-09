@@ -1,4 +1,7 @@
 #include "app/Font5x7.h"
+#include "app/TextRender.h"
+#include <algorithm>
+#include <string>
 
 namespace ludora {
 namespace font5x7 {
@@ -192,14 +195,14 @@ size_t lengthUtf8(const char* utf8) {
     return n;
 }
 
-i32 measureUtf8(const char* utf8, i32 scale) {
+i32 measureUtf8Bitmap(const char* utf8, i32 scale) {
     if (!utf8 || scale <= 0) return 0;
     const i32 n = static_cast<i32>(lengthUtf8(utf8));
     if (n == 0) return 0;
     return (n * kGlyphW + (n - 1)) * scale;
 }
 
-void drawTextUtf8(Framebuffer& fb, i32 x, i32 y, const char* utf8, Color color, i32 scale) {
+void drawTextUtf8Bitmap(Framebuffer& fb, i32 x, i32 y, const char* utf8, Color color, i32 scale) {
     if (!utf8 || scale <= 0) return;
 
     i32 penX = x;
@@ -227,7 +230,85 @@ void drawTextUtf8(Framebuffer& fb, i32 x, i32 y, const char* utf8, Color color, 
     }
 }
 
+// ---------------------------------------------------------------------------
+//  API publica: delega en el rasterizador del sistema
+// ---------------------------------------------------------------------------
+// Las funciones de abajo conservan su firma para que las ~470 llamadas del
+// motor no cambien, pero por dentro usan las fuentes reales de Windows. Si el
+// sistema no las puede crear, se recurre a la bitmap de este archivo: mejor
+// texto pixelado que ningun texto.
+
 i32 measure(const char* text, i32 scale) {
+    if (!text || scale <= 0) return 0;
+    if (textr::available()) return textr::measure(text, scale);
+    return measureBitmap(text, scale);
+}
+
+i32 measureUtf8(const char* utf8, i32 scale) {
+    if (!utf8 || scale <= 0) return 0;
+    if (textr::available()) return textr::measure(utf8, scale);
+    return measureUtf8Bitmap(utf8, scale);
+}
+
+void drawText(Framebuffer& fb, i32 x, i32 y, const char* text, Color color, i32 scale) {
+    if (!text || scale <= 0) return;
+    if (textr::available()) { textr::draw(fb, x, y, text, color, scale); return; }
+    drawTextBitmap(fb, x, y, text, color, scale);
+}
+
+void drawTextUtf8(Framebuffer& fb, i32 x, i32 y, const char* utf8, Color color, i32 scale) {
+    if (!utf8 || scale <= 0) return;
+    if (textr::available()) { textr::draw(fb, x, y, utf8, color, scale); return; }
+    drawTextUtf8Bitmap(fb, x, y, utf8, color, scale);
+}
+
+void drawFitted(Framebuffer& fb, Recti box, const char* utf8, Color color,
+                i32 maxScale, i32 padX) {
+    if (!utf8 || !*utf8 || box.w <= 0 || box.h <= 0) return;
+
+    const i32 util = box.w - padX * 2;
+    if (util <= 0) return;
+
+    // 1) Bajar la escala mientras no quepa.
+    i32 esc = std::max(1, maxScale);
+    while (esc > 1 && measureUtf8(utf8, esc) > util) --esc;
+
+    i32 ancho = measureUtf8(utf8, esc);
+
+    // 2) Si ni a escala 1 entra, se recorta por caracteres y se marcan los
+    //    puntos: mejor un rotulo abreviado que un boton en blanco.
+    std::string corto;
+    if (ancho > util) {
+        const char* p = utf8;
+        std::string acc;
+        for (;;) {
+            const char* antes = p;
+            const u32 cp = nextUtf8(p);
+            if (cp == 0) break;
+            std::string prueba = acc;
+            prueba.append(antes, static_cast<size_t>(p - antes));
+            if (measureUtf8((prueba + "...").c_str(), esc) > util) break;
+            acc.swap(prueba);
+        }
+        corto = acc.empty() ? std::string(".") : acc + "...";
+        utf8  = corto.c_str();
+        ancho = measureUtf8(utf8, esc);
+    }
+
+    // El alto tiene que ser el de la LETRA que se va a dibujar. Dos errores
+    // distintos caben aqui y los dos empujan el rotulo hacia abajo:
+    //   - kGlyphH son los 7 px de la fuente bitmap, no de la del sistema;
+    //   - lineHeight incluye el hueco ENTRE renglones, que no es tinta.
+    // Lo que centra bien es el alto del glifo.
+    const i32 alto = textr::available() ? textr::glyphHeight(esc)
+                                        : kGlyphH * esc;
+    drawTextUtf8(fb, box.x + (box.w - ancho) / 2,
+                 box.y + (box.h - alto) / 2, utf8, color, esc);
+}
+
+// --- implementaciones bitmap, usadas solo si GDI no esta disponible --------
+
+i32 measureBitmap(const char* text, i32 scale) {
     if (!text || scale <= 0) return 0;
     i32 n = 0;
     for (const char* p = text; *p; ++p) ++n;
@@ -236,7 +317,7 @@ i32 measure(const char* text, i32 scale) {
     return (n * kGlyphW + (n - 1)) * scale;
 }
 
-void drawText(Framebuffer& fb, i32 x, i32 y, const char* text, Color color, i32 scale) {
+void drawTextBitmap(Framebuffer& fb, i32 x, i32 y, const char* text, Color color, i32 scale) {
     if (!text || scale <= 0) return;
 
     i32 penX = x;

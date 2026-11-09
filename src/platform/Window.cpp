@@ -1,4 +1,5 @@
 #include "platform/Window.h"
+#include "resource.h"   // IDI_LUDORA: el icono de la aplicacion
 #include <algorithm>
 #include <windowsx.h>
 
@@ -41,8 +42,31 @@ bool Window::create(const WindowDesc& d) {
     wc.hCursor       = LoadCursorW(nullptr, IDC_ARROW);
     wc.hbrBackground = nullptr;   // no borrar fondo: lo pinta el motor
     wc.lpszClassName = kClassName;
-    wc.hIcon         = LoadIconW(nullptr, IDI_APPLICATION);
-    wc.hIconSm       = wc.hIcon;
+    // ⭐ EL ICONO PROPIO, EN SUS DOS MEDIDAS.
+    //
+    // Antes habia aqui un LoadIconW(nullptr, IDI_APPLICATION): el icono
+    // generico de Windows. El .exe podia llevar el suyo y la ventana seguia
+    // ensenando el del sistema, porque la clase de ventana manda sobre lo que
+    // se ve en la barra de tareas y en Alt+Tab.
+    //
+    // Se usa LoadImage y no LoadIcon porque LoadIcon devuelve SIEMPRE la
+    // medida grande y deja que Windows la encoja para la barra de titulo. El
+    // .ico trae un dibujo hecho a 16 px, y pedirlo explicitamente es la
+    // diferencia entre una L nitida y una mancha reescalada.
+    //
+    // Si por lo que sea el recurso no estuviera, se recurre al icono del
+    // sistema: quedarse sin ventana por un icono seria absurdo.
+    wc.hIcon = static_cast<HICON>(LoadImageW(
+        m_hinst, MAKEINTRESOURCEW(IDI_LUDORA), IMAGE_ICON,
+        GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON),
+        LR_DEFAULTCOLOR));
+    wc.hIconSm = static_cast<HICON>(LoadImageW(
+        m_hinst, MAKEINTRESOURCEW(IDI_LUDORA), IMAGE_ICON,
+        GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON),
+        LR_DEFAULTCOLOR));
+
+    if (!wc.hIcon)   wc.hIcon   = LoadIconW(nullptr, IDI_APPLICATION);
+    if (!wc.hIconSm) wc.hIconSm = wc.hIcon;
 
     if (!RegisterClassExW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
         return false;

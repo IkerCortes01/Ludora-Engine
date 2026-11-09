@@ -33,6 +33,22 @@ voxrun*/
 *.t3*
 *.t4*
 *.t5*
+*.t6*
+*.t7*
+*.t8*
+*.t9*
+
+# Datos que genera la propia plataforma al usarla. Son del usuario que la
+# ejecuta, no del proyecto: versionarlos subiria el catalogo, la biblioteca
+# y los comunicados de quien compilo.
+catalogo-dev.dat
+catalogo-dev.dat.pendientes
+biblioteca-hist.dat
+comunicados.dat
+desinstalados.dat
+siguiendo.dat
+resenas.dat
+ludora-lanzamientos.log
 
 # Varios
 *.obj

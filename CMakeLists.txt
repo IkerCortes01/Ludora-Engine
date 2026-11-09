@@ -31,9 +31,11 @@ add_executable(Ludora WIN32
     src/render/RendererGDI.cpp
     src/app/DemoScene.cpp
     src/app/Font5x7.cpp
+    src/app/TextRender.cpp
     src/app/SelfTest.cpp
     src/app/Screenshot.cpp
     src/app/Account.cpp
+    src/app/AccountStore.cpp
     src/app/Device.cpp
     src/app/Profile.cpp
     src/app/Vault.cpp
@@ -41,6 +43,7 @@ add_executable(Ludora WIN32
     src/app/Argon2.cpp
     src/app/Session.cpp
     src/app/GameInstall.cpp
+    src/app/VirtualFileSystem.cpp
     src/app/HomeScene.cpp
     src/ui/TextField.cpp
     src/ui/TitleBar.cpp
@@ -48,7 +51,13 @@ add_executable(Ludora WIN32
     res/Ludora.rc
 )
 
-target_include_directories(Ludora PRIVATE ${CMAKE_SOURCE_DIR}/src)
+# `res` entra en la ruta de inclusion para que resource.h lo vean los DOS
+# compiladores: el de C++ (Window.cpp lo necesita para IDI_LUDORA) y el de
+# recursos (Ludora.rc, que define ese mismo icono). Si solo lo viera uno, el
+# numero dejaria de coincidir y la ventana se quedaria sin icono en silencio.
+target_include_directories(Ludora PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/res)
 
 target_compile_definitions(Ludora PRIVATE
     UNICODE

@@ -18,6 +18,14 @@ public:
     std::string description;   // descripcion publica
     std::string photoFile;     // ruta relativa de la foto ("" si no hay)
 
+    /// Cuando se creo la cuenta, en segundos desde epoch. 0 = desconocida.
+    ///
+    /// Los perfiles escritos antes de que existiera este campo no lo traen y
+    /// se quedan en 0; la ficha publica muestra entonces "fecha no
+    /// registrada" en vez de inventar una. Al GUARDAR un perfil sin fecha se
+    /// le pone la del momento, asi que se rellena sola en el primer cambio.
+    long long createdAt = 0;
+
     /// Carga desde disco. Devuelve false si no hay perfil guardado.
     static bool load(const std::wstring& path, Profile& out);
     /// Guarda en disco, sobrescribiendo.

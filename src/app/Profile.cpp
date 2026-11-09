@@ -85,6 +85,9 @@ bool Profile::load(const std::wstring& path, Profile& out) {
         if      (k == "user")  out.userName    = v;
         else if (k == "desc")  out.description = v;
         else if (k == "photo") out.photoFile   = v;
+        // Clave nueva: un perfil escrito antes no la trae y queda en 0, que
+        // la ficha publica interpreta como "fecha no registrada".
+        else if (k == "since") out.createdAt   = std::atoll(v.c_str());
     }
     return true;
 }

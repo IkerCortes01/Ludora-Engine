@@ -1,5 +1,6 @@
 #include "ui/TextField.h"
 #include "app/Font5x7.h"
+#include "app/TextRender.h"
 #include "core/Types.h"
 #include "render/Framebuffer.h"
 #include <algorithm>
@@ -9,10 +10,22 @@ namespace ludora {
 
 namespace {
 constexpr i32 kPadX = 8;          // margen interior horizontal
+constexpr i32 kPadY = 6;          // margen superior cuando el texto va arriba
 constexpr f64 kBlinkPeriod = 1.0; // ciclo completo del cursor
 
-/// Avance por caracter: la fuente es monoespaciada (5 px + 1 de separacion).
-i32 advance(i32 scale) { return (font5x7::kGlyphW + 1) * scale; }
+// Aqui habia un `advance(scale)` con un paso fijo por caracter, heredado de
+// cuando la fuente era bitmap y monoespaciada. La del sistema es proporcional:
+// cada letra se mide con font5x7::measureUtf8 y la pluma avanza con ese ancho.
+
+/// Alto de la letra que de verdad se va a dibujar.
+///
+/// Por el mismo motivo que el avance: `font5x7::kGlyphH` son los 7 px de la
+/// fuente bitmap. Centrar el texto del campo con ese valor, teniendo la del
+/// sistema que es mas alta, dejaba las letras pegadas al borde de abajo.
+i32 altoTexto(i32 scale) {
+    return textr::available() ? textr::glyphHeight(scale)
+                              : font5x7::kGlyphH * scale;
+}
 } // namespace
 
 size_t TextField::byteOfChar(size_t charIdx) const {
@@ -63,17 +76,108 @@ std::string TextField::visibleText() const {
 }
 
 i32 TextField::xFromIndex(size_t idx) const {
-    return static_cast<i32>(idx) * advance(m_style.textScale);
+    // Ancho REAL de los `idx` primeros caracteres. La fuente del sistema es
+    // proporcional, asi que multiplicar por un paso fijo descuadraba el cursor,
+    // la seleccion y el desplazamiento respecto a las letras dibujadas.
+    const std::string vis = visibleText();
+    const i32 scale = m_style.textScale;
+    i32 px = 0;
+    size_t n = 0;
+    for (const char* p = vis.c_str(); *p && n < idx; ++n) {
+        const char* charStart = p;
+        if (font5x7::nextUtf8(p) == 0) break;
+        char s[5] = {};
+        const size_t len = static_cast<size_t>(p - charStart);
+        for (size_t k = 0; k < len && k < 4; ++k) s[k] = charStart[k];
+        px += font5x7::measureUtf8(s, scale);
+    }
+    return px;
 }
 
 size_t TextField::indexFromX(i32 x) const {
-    const i32 adv = advance(m_style.textScale);
     // Coordenada relativa al inicio del texto, compensando el scroll.
     const i32 rel = x - (m_rect.x + kPadX) + m_scrollPx;
     if (rel <= 0) return 0;
-    // +adv/2 hace que el cursor salte al hueco mas cercano, no al de la izquierda.
-    const size_t idx = static_cast<size_t>((rel + adv / 2) / adv);
+
+    // Se avanza letra a letra hasta pasar el punto; gana el hueco mas cercano,
+    // no siempre el de la izquierda.
+    const std::string vis = visibleText();
+    const i32 scale = m_style.textScale;
+    i32 px = 0;
+    size_t idx = 0;
+    for (const char* p = vis.c_str(); *p; ++idx) {
+        const char* charStart = p;
+        if (font5x7::nextUtf8(p) == 0) break;
+        char s[5] = {};
+        const size_t len = static_cast<size_t>(p - charStart);
+        for (size_t k = 0; k < len && k < 4; ++k) s[k] = charStart[k];
+        const i32 ancho = font5x7::measureUtf8(s, scale);
+        if (rel < px + ancho / 2) return idx;
+        px += ancho;
+    }
     return std::min(idx, charCount());
+}
+
+size_t TextField::indexFromPoint(i32 x, i32 y) const {
+    if (!m_style.multiline) return indexFromX(x);
+
+    // Se recorre el texto repartiendolo igual que al dibujar, y se devuelve el
+    // indice del hueco mas cercano al punto. Recorrer es mas fiable que
+    // calcular: asi el reparto de filas vive en un solo sitio y el cursor no
+    // puede acabar en una fila distinta de la que se ve.
+    const i32 scale  = m_style.textScale;
+    const i32 textH  = altoTexto(scale);
+    const i32 clipL  = m_rect.x + kPadX;
+    const i32 clipR  = m_rect.x + m_rect.w - kPadX;
+    const i32 ty     = m_style.alignTop ? m_rect.y + kPadY
+                                        : m_rect.y + (m_rect.h - textH) / 2;
+    const i32 anchoU = std::max(1, clipR - clipL);
+    const i32 lineaH = textH + 3;
+
+    // Fila pedida por el clic, acotada a cero por arriba.
+    const i32 filaObj = std::max(0, (y - ty) / lineaH);
+
+    // Se recorre el texto con la MISMA pluma que al dibujar -- en pixeles, no
+    // en columnas, porque la fuente es proporcional. El cursor va al primer
+    // hueco de la fila pedida que ya pase de la x pedida; si la fila se acaba
+    // antes, al final de esa fila.
+    const std::string vis = visibleText();
+    i32 fila = 0, px = clipL, idx = 0;
+    size_t finDeFila = 0;        // ultimo hueco visto dentro de la fila buscada
+    bool  enFila = false;        // se llego a la fila buscada
+
+    for (const char* p = vis.c_str(); ; ++idx) {
+        const bool esLaFila = (fila == filaObj);
+        if (esLaFila) {
+            enFila = true;
+            if (px >= x) return std::min(static_cast<size_t>(idx), charCount());
+            finDeFila = static_cast<size_t>(idx);
+        } else if (fila > filaObj) {
+            // Se paso de fila sin alcanzar la x: el cursor va al final de la
+            // fila buscada.
+            return std::min(finDeFila, charCount());
+        }
+
+        if (!*p) break;
+        const char* charStart = p;
+        const u32 cp = font5x7::nextUtf8(p);
+        if (cp == 0) break;
+
+        if (cp == '\n') { ++fila; px = clipL; continue; }
+
+        char s[5] = {};
+        const size_t len = static_cast<size_t>(p - charStart);
+        for (size_t k = 0; k < len && k < 4; ++k) s[k] = charStart[k];
+        const i32 ancho = font5x7::measureUtf8(s, scale);
+
+        if (px + ancho > clipL + anchoU && px > clipL) { ++fila; px = clipL; }
+        px += ancho;
+    }
+
+    // Se acabo el texto: si la fila buscada existia, al final de ella; si el
+    // clic cayo por debajo de todo, al final del texto.
+    if (enFila) return std::min(static_cast<size_t>(idx), charCount());
+    return charCount();
 }
 
 void TextField::deleteSelection() {
@@ -127,8 +231,16 @@ void TextField::onChar(wchar_t c) {
     if (!m_focused) return;
 
     const u32 cp = static_cast<u32>(c);
-    if (cp < 32 || cp == 127) return;               // codigos de control fuera
-    if (!font5x7::glyphUnicode(cp)) return;         // sin glifo no se acepta
+
+    // El salto de linea es el unico codigo de control que se acepta, y solo
+    // en modo multilinea: es lo que separa parrafos en un texto largo. No
+    // tiene glifo, asi que se deja pasar antes de exigirlo.
+    const bool esSalto = (cp == '\n');
+    if (esSalto && !m_style.multiline) return;
+    if (!esSalto) {
+        if (cp < 32 || cp == 127) return;           // codigos de control fuera
+        if (!font5x7::glyphUnicode(cp)) return;     // sin glifo no se acepta
+    }
 
     // El limite es por caracteres; la seleccion se va a reemplazar, asi que
     // no cuenta para el tope.
@@ -156,34 +268,125 @@ void TextField::onChar(wchar_t c) {
     m_blink = 0.0;
 }
 
+namespace {
+
+/// true si el caracter separa palabras. Lo que no es letra ni digito corta:
+/// es como se comporta cualquier editor al saltar con Ctrl.
+bool esSeparador(char c) {
+    const unsigned char u = static_cast<unsigned char>(c);
+    if (u >= 0x80) return false;   // acentuadas y enye cuentan como letra
+    return !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+             (c >= '0' && c <= '9') || c == '_');
+}
+
+} // namespace
+
+size_t TextField::wordLeft(size_t desde) const {
+    // Primero se saltan los separadores que haya justo detras, y luego la
+    // palabra entera: con una sola pasada, Ctrl+Izquierda sobre " hola" se
+    // quedaba en el espacio en vez de llegar al principio de la palabra.
+    size_t i = desde;
+    while (i > 0 && esSeparador(m_text[byteOfChar(i - 1)])) --i;
+    while (i > 0 && !esSeparador(m_text[byteOfChar(i - 1)])) --i;
+    return i;
+}
+
+size_t TextField::wordRight(size_t desde) const {
+    const size_t n = charCount();
+    size_t i = desde;
+    while (i < n && !esSeparador(m_text[byteOfChar(i)])) ++i;
+    while (i < n && esSeparador(m_text[byteOfChar(i)])) ++i;
+    return i;
+}
+
+size_t TextField::lineStart(size_t desde) const {
+    size_t i = desde;
+    while (i > 0 && m_text[byteOfChar(i - 1)] != '\n') --i;
+    return i;
+}
+
+size_t TextField::lineEnd(size_t desde) const {
+    const size_t n = charCount();
+    size_t i = desde;
+    while (i < n && m_text[byteOfChar(i)] != '\n') ++i;
+    return i;
+}
+
 void TextField::onKey(u32 vk, bool shift, bool ctrl) {
     if (!m_focused) return;
     m_blink = 0.0;
 
     switch (vk) {
+    // Ctrl salta de palabra en palabra, como en cualquier editor. Sin esto,
+    // recorrer una descripcion de 5000 caracteres era tecla a tecla.
     case VK_LEFT:
-        if (m_caret > 0) --m_caret;
+        if (ctrl)            m_caret = wordLeft(m_caret);
+        else if (hasSelection() && !shift) m_caret = selStart();
+        else if (m_caret > 0) --m_caret;
         if (!shift) m_selAnchor = m_caret;
         break;
 
     case VK_RIGHT:
-        if (m_caret < charCount()) ++m_caret;
+        if (ctrl)            m_caret = wordRight(m_caret);
+        else if (hasSelection() && !shift) m_caret = selEnd();
+        else if (m_caret < charCount()) ++m_caret;
         if (!shift) m_selAnchor = m_caret;
         break;
 
+    // Arriba y abajo en las cajas de varias lineas: se mantiene la columna,
+    // que es lo que se espera al recorrer un texto largo.
+    case VK_UP:
+    case VK_DOWN: {
+        if (!m_style.multiline) {
+            // En una linea, arriba/abajo van a los extremos.
+            m_caret = (vk == VK_UP) ? 0 : charCount();
+            if (!shift) m_selAnchor = m_caret;
+            break;
+        }
+        const size_t ini = lineStart(m_caret);
+        const size_t col = m_caret - ini;
+        if (vk == VK_UP) {
+            if (ini == 0) { m_caret = 0; }
+            else {
+                const size_t iniPrev = lineStart(ini - 1);
+                const size_t finPrev = ini - 1;
+                m_caret = std::min(iniPrev + col, finPrev);
+            }
+        } else {
+            const size_t fin = lineEnd(m_caret);
+            if (fin >= charCount()) { m_caret = charCount(); }
+            else {
+                const size_t iniSig = fin + 1;
+                m_caret = std::min(iniSig + col, lineEnd(iniSig));
+            }
+        }
+        if (!shift) m_selAnchor = m_caret;
+        break;
+    }
+
+    // Inicio y fin de LINEA; con Ctrl, de todo el texto. En una caja de una
+    // sola linea las dos cosas coinciden.
     case VK_HOME:
-        m_caret = 0;
+        m_caret = ctrl ? 0 : lineStart(m_caret);
         if (!shift) m_selAnchor = m_caret;
         break;
 
     case VK_END:
-        m_caret = charCount();
+        m_caret = ctrl ? charCount() : lineEnd(m_caret);
         if (!shift) m_selAnchor = m_caret;
         break;
 
     case VK_BACK:
         if (hasSelection()) {
             deleteSelection();
+        } else if (ctrl && m_caret > 0) {
+            // Ctrl+Retroceso borra la palabra entera de la izquierda.
+            const size_t ini = wordLeft(m_caret);
+            const size_t b0 = byteOfChar(ini);
+            const size_t b1 = byteOfChar(m_caret);
+            m_text.erase(b0, b1 - b0);
+            m_caret = ini;
+            m_selAnchor = m_caret;
         } else if (m_caret > 0) {
             // Borrar el caracter completo, que puede ocupar 2 bytes.
             const size_t b0 = byteOfChar(m_caret - 1);
@@ -197,6 +400,13 @@ void TextField::onKey(u32 vk, bool shift, bool ctrl) {
     case VK_DELETE:
         if (hasSelection()) {
             deleteSelection();
+        } else if (ctrl && m_caret < charCount()) {
+            // Ctrl+Supr borra la palabra entera de la derecha.
+            const size_t fin = wordRight(m_caret);
+            const size_t b0 = byteOfChar(m_caret);
+            const size_t b1 = byteOfChar(fin);
+            m_text.erase(b0, b1 - b0);
+            m_selAnchor = m_caret;
         } else if (m_caret < charCount()) {
             const size_t b0 = byteOfChar(m_caret);
             const size_t b1 = byteOfChar(m_caret + 1);
@@ -226,14 +436,12 @@ void TextField::onKey(u32 vk, bool shift, bool ctrl) {
 }
 
 void TextField::onMouseDown(i32 x, i32 y) {
-    (void)y;
-    m_caret = m_selAnchor = indexFromX(x);
+    m_caret = m_selAnchor = indexFromPoint(x, y);
     m_blink = 0.0;
 }
 
 void TextField::onMouseDrag(i32 x, i32 y) {
-    (void)y;
-    m_caret = indexFromX(x);   // el ancla se queda donde empezo el clic
+    m_caret = indexFromPoint(x, y);   // el ancla se queda donde empezo el clic
     m_blink = 0.0;
 }
 
@@ -250,8 +458,11 @@ void TextField::render(Framebuffer& fb) const {
     fb.drawRect(m_rect, foc ? m_style.borderFocused : m_style.border, foc ? 2 : 1);
 
     const i32 scale = m_style.textScale;
-    const i32 textH = font5x7::kGlyphH * scale;
-    const i32 ty    = m_rect.y + (m_rect.h - textH) / 2;
+    const i32 textH = altoTexto(scale);
+    // Centrado en vertical para una linea; pegado arriba cuando el campo es
+    // una caja alta, donde el texto debe arrancar en el borde superior.
+    const i32 ty    = m_style.alignTop ? m_rect.y + kPadY
+                                       : m_rect.y + (m_rect.h - textH) / 2;
     const i32 tx    = m_rect.x + kPadX;
 
     // Region util para el texto, dentro de los margenes.
@@ -262,6 +473,69 @@ void TextField::render(Framebuffer& fb) const {
 
     if (vis.empty() && !foc && !m_placeholder.empty()) {
         font5x7::drawTextUtf8(fb, tx, ty, m_placeholder.c_str(), m_style.placeholder, scale);
+        return;
+    }
+
+    // ----------------------------------------------------------------------
+    // Modo multilinea: el texto se reparte en filas, cortando en los saltos
+    // de linea y ajustando al ancho del campo. Es lo que necesita un texto
+    // largo (un reglamento, una descripcion); el modo de una linea de mas
+    // abajo sigue siendo el correcto para un campo de formulario.
+    // ----------------------------------------------------------------------
+    if (m_style.multiline) {
+        const i32 anchoU = std::max(1, clipR - clipL);
+        const i32 lineaH = textH + 3;
+
+        i32 fila = 0;
+        i32 x    = clipL;           // pluma: avanza por el ancho REAL del glifo
+        i32 idx  = 0;               // indice de caracter, para situar el cursor
+        i32 caretPx = clipL, caretPy = ty;   // donde acabara el cursor
+
+        for (const char* p = vis.c_str(); ; ++idx) {
+            // El cursor se situa ANTES de dibujar el caracter: asi queda en su
+            // hueco aunque este al final del texto.
+            if (idx == static_cast<i32>(m_caret)) {
+                caretPx = x;
+                caretPy = ty + fila * lineaH;
+            }
+            if (!*p) break;
+
+            const char* charStart = p;
+            const u32 cp = font5x7::nextUtf8(p);
+            if (cp == 0) break;
+
+            if (cp == '\n') { ++fila; x = clipL; continue; }
+
+            char s[5] = {};
+            const size_t len = static_cast<size_t>(p - charStart);
+            for (size_t k = 0; k < len && k < 4; ++k) s[k] = charStart[k];
+
+            // El ancho depende de la letra: la fuente del sistema es
+            // proporcional. Avanzar con un paso fijo dejaba huecos irregulares
+            // -- una 'w' se salia de su casilla y una 'i' la dejaba medio
+            // vacia.
+            const i32 ancho = font5x7::measureUtf8(s, scale);
+
+            // Ajuste al ancho: al no caber el caracter se baja de fila. Corta
+            // por caracter y no por palabra; para un texto largo escrito a
+            // mano es preferible a dejar huecos grandes al final de la linea.
+            if (x + ancho > clipL + anchoU && x > clipL) { ++fila; x = clipL; }
+
+            const i32 cx = x;
+            const i32 cy = ty + fila * lineaH;
+            x += ancho;
+
+            // Fuera del alto util: se deja de dibujar, pero se sigue contando
+            // para que el cursor acabe en su sitio.
+            if (cy + textH > m_rect.y + m_rect.h - kPadY) continue;
+
+            font5x7::drawTextUtf8(fb, cx, cy, s, m_style.text, scale);
+        }
+
+        if (foc && m_blink < kBlinkPeriod / 2.0 &&
+            caretPy + textH <= m_rect.y + m_rect.h - kPadY)
+            fb.fillRect({caretPx, caretPy - 1, std::max(1, scale), textH + 2},
+                        m_style.caret);
         return;
     }
 
@@ -287,21 +561,26 @@ void TextField::render(Framebuffer& fb) const {
     // Texto caracter a caracter: permite recortar por los margenes sin
     // depender de un clip global en el framebuffer. Se recorre por caracteres
     // UTF-8, no por bytes, para no partir un acento.
-    const i32 adv = advance(scale);
-    i32 idx = 0;
-    for (const char* p = vis.c_str(); *p; ++idx) {
+    // La pluma avanza por el ancho REAL de cada letra: con un paso fijo, una
+    // fuente proporcional deja huecos irregulares entre caracteres.
+    i32 px = 0;
+    for (const char* p = vis.c_str(); *p; ) {
         const char* charStart = p;
         const u32 cp = font5x7::nextUtf8(p);
         if (cp == 0) break;
-
-        const i32 cx = clipL + idx * adv - scroll;
-        if (cx + adv <= clipL) continue;   // aun a la izquierda del margen
-        if (cx >= clipR) break;            // ya fuera por la derecha
 
         // Copia del caracter completo (1 a 3 bytes) para dibujarlo suelto.
         char s[5] = {};
         const size_t len = static_cast<size_t>(p - charStart);
         for (size_t k = 0; k < len && k < 4; ++k) s[k] = charStart[k];
+        const i32 ancho = font5x7::measureUtf8(s, scale);
+
+        const i32 cx = clipL + px - scroll;
+        px += ancho;
+
+        if (cx + ancho <= clipL) continue;   // aun a la izquierda del margen
+        if (cx >= clipR) break;              // ya fuera por la derecha
+
         font5x7::drawTextUtf8(fb, cx, ty, s, m_style.text, scale);
     }
 

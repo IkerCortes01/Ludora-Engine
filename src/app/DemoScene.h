@@ -26,6 +26,7 @@ public:
     void  setEmailText(const std::string& s)    { m_email.setText(s); }
     void  setPasswordText(const std::string& s) { m_password.setText(s); }
     Recti verifyOkRect() const      { return m_verifyOkRect; }
+    Recti searchButtonRect() const  { return m_searchBtnRect; }
     bool  verifyOpen() const        { return m_verifyOpen; }
     const std::string& verifyMessage() const { return m_verifyMsg; }
     void  setVerifyKey(size_t i, const std::string& s) {
@@ -94,11 +95,20 @@ private:
     std::string m_deviceKind;               // "Escritorio", "Portatil"...
     bool        m_autoLogin      = false;   // entrar sin pedir contrasena
 
-    // Busqueda de cuenta con la tecla B y animacion de palomita verde.
+    // Busqueda de cuenta y animacion de palomita verde.
     bool        m_checkAnim     = false;   // animacion en curso
     f64         m_checkTime     = 0.0;     // tiempo transcurrido de la animacion
     std::string m_foundEmail;              // cuenta encontrada, para entrar
     std::string m_foundUser;
+
+    // Boton BUSCAR CUENTA, en el lado derecho de la ventana. Su borde late
+    // entre verde y rojo, asi que necesita su propio reloj.
+    Recti m_searchBtnRect{};
+    bool  m_searchHover = false;
+    bool  m_searchDown  = false;
+    f64   m_searchAnimTime = 0.0;
+    /// Lanza la busqueda de una cuenta guardada en el sistema.
+    void  runAccountSearch();
 
     void startCheckAnimation(const std::string& email, const std::string& user);
     void drawCheckAnimation(Framebuffer& fb);

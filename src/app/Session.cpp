@@ -41,9 +41,17 @@ bool Session::save(const std::wstring& path,
     const std::vector<u8> plain(payload.begin(), payload.end());
     std::vector<u8> blob;
     std::string err;
+    // seal() genera salts y nonces NUEVOS en cada llamada, asi que guardar es
+    // rotar: el token de hoy no comparte ninguna clave con el de ayer, y
+    // capturar una version no sirve para la siguiente.
     if (!Vault::seal(secret, plain, blob, err)) return false;
 
-    return Vault::saveFile(path, blob);
+    if (!Vault::saveFile(path, blob)) return false;
+
+    // Guardar una sesion valida es la senal mas clara de que quien esta al
+    // mando es el usuario legitimo: se limpian los fallos acumulados.
+    VaultGuard::reset();
+    return true;
 }
 
 Session::Data Session::load(const std::wstring& path) {
@@ -55,11 +63,18 @@ Session::Data Session::load(const std::wstring& path) {
     const std::string secret = deviceSecret();
     if (secret.empty()) return out;
 
+    // El guardian corta el acceso si ya hubo manipulacion o demasiados
+    // fallos seguidos. No se dice por que: un aviso detallado le contaria a
+    // un atacante en que punto esta.
+    if (VaultGuard::locked()) return out;
+
     std::vector<u8> plain;
     std::string err;
     // Si el archivo es de otro equipo, la huella no coincide y el descifrado
     // falla: eso es justo lo que impide reutilizar el token en otra maquina.
-    if (!Vault::open(secret, blob, plain, err)) return out;
+    const Vault::OpenResult r = Vault::openDetailed(secret, blob, plain, err);
+    VaultGuard::note(r);
+    if (r != Vault::OpenResult::Ok) return out;
 
     const std::string texto(plain.begin(), plain.end());
     if (texto.rfind(kTokenMagic, 0) != 0) return out;   // marca ausente

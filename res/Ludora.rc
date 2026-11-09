@@ -1,4 +1,14 @@
 #include <windows.h>
+#include "resource.h"
+
+// ⭐ EL ICONO DE LA APLICACION.
+//
+// Va el PRIMERO del archivo a proposito: el Explorador de Windows muestra como
+// icono del .exe el recurso de icono con el ID numerico mas bajo, no el que
+// lleve un nombre concreto. Si algun dia se anade otro icono (un documento,
+// una bandeja), tiene que recibir un ID mayor que este o lo suplantaria en el
+// Explorador sin que nada mas cambie.
+IDI_LUDORA  ICON  "Ludora.ico"
 
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION     0,1,0,0

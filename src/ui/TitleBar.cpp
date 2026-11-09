@@ -1,6 +1,7 @@
 #include "ui/TitleBar.h"
 #include "ui/Theme.h"
 #include "app/Font5x7.h"
+#include "app/TextRender.h"
 #include "core/Engine.h"
 #include <algorithm>
 #include <cmath>
@@ -102,7 +103,7 @@ void TitleBar::render(Engine& engine, Framebuffer& fb) {
     const i32 dot = std::max(4, barH / 3);
     fb.fillRect({8, (barH - dot) / 2, dot, dot}, kAccent);
     const i32 ts = std::max(1, barH / 12);
-    font5x7::drawText(fb, 8 + dot + 8, (barH - font5x7::kGlyphH * ts) / 2,
+    font5x7::drawText(fb, 8 + dot + 8, (barH - textr::glyphHeight(ts)) / 2,
                       "LUDORA", kText, ts);
 
     for (i32 i = 0; i < kButtonCount; ++i) {

@@ -1,6 +1,7 @@
 #include "app/DemoScene.h"
 #include "app/Account.h"
 #include "app/Font5x7.h"
+#include "app/TextRender.h"
 #include "app/HomeScene.h"
 #include "app/Profile.h"
 #include "app/Device.h"
@@ -9,6 +10,7 @@
 #include "core/Engine.h"
 #include "ui/Theme.h"
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <windows.h>
 
@@ -134,6 +136,16 @@ void DemoScene::layout(i32 fbW, i32 fbH) {
     m_verifyBtnRect = Recti{x, y, w, kVerifyH};
     y += kVerifyH + 12;
     m_actionRect = Recti{x, y, w, kActionH};
+
+    // --- BUSCAR CUENTA: pegado al lado derecho de la ventana ---
+    // Va fuera del bloque centrado y a media altura, de modo que no compite
+    // con el formulario ni se solapa con el en ventanas estrechas: si no
+    // cabria sin pisar los campos, se queda sin sitio (w = 0) y no se dibuja.
+    const i32 bw = 150, bh = 40, margen = 20;
+    const i32 bx = fbW - bw - margen;
+    m_searchBtnRect = (bx > x + w + 12)
+        ? Recti{ bx, (fbH - bh) / 2, bw, bh }
+        : Recti{};
 }
 
 void DemoScene::focusNext() {
@@ -318,17 +330,26 @@ void DemoScene::update(Engine& engine, f64 dt) {
 
     if (engine.input().keyPressed(VK_ESCAPE)) { engine.requestQuit(); return; }
 
-    // Tecla B: buscar en el sistema una cuenta ya registrada, sin escribir
-    // nada. Si la encuentra, animacion de palomita y a la biblioteca.
-    if (engine.input().keyPressed('B')) {
-        const Account::Found f = Account::searchSystem();
-        if (f.ok) {
-            startCheckAnimation(f.email, f.userName);
-        } else {
-            m_message = "No se encontro ninguna cuenta guardada en el sistema.";
-            m_messageIsError = true;
+    // --- boton BUSCAR CUENTA (lado derecho) ---
+    // El borde late entre verde y rojo, asi que su reloj avanza siempre.
+    m_searchAnimTime += dt;
+    {
+        const f32 sc = std::max(0.01f, engine.window().contentScale());
+        const i32 lx = static_cast<i32>(engine.input().mousePos().x / sc);
+        const i32 ly = static_cast<i32>(engine.input().mousePos().y / sc);
+        m_searchHover = (lx >= m_searchBtnRect.x &&
+                         lx <  m_searchBtnRect.x + m_searchBtnRect.w &&
+                         ly >= m_searchBtnRect.y &&
+                         ly <  m_searchBtnRect.y + m_searchBtnRect.h);
+
+        if (engine.input().mousePressed(0) && m_searchHover) m_searchDown = true;
+        if (engine.input().mouseReleased(0)) {
+            const bool activar = (m_searchDown && m_searchHover);
+            m_searchDown = false;
+            if (activar) { runAccountSearch(); return; }
         }
-        return;
+        // Con el raton sobre el boton, el clic es suyo y no del formulario.
+        if (m_searchHover) { m_email.update(dt); m_password.update(dt); return; }
     }
 
     // La barra devuelve true si el raton esta sobre un boton de ventana:
@@ -336,6 +357,18 @@ void DemoScene::update(Engine& engine, f64 dt) {
     const bool sobreBoton = m_titleBar.update(engine);
     if (!sobreBoton) handleForm(engine, dt);
     else { m_email.update(dt); m_password.update(dt); }
+}
+
+void DemoScene::runAccountSearch() {
+    // Busca una cuenta ya registrada en el sistema, sin escribir nada. Si la
+    // encuentra, animacion de palomita y a la biblioteca.
+    const Account::Found f = Account::searchSystem();
+    if (f.ok) {
+        startCheckAnimation(f.email, f.userName);
+    } else {
+        m_message = "No se encontro ninguna cuenta guardada en el sistema.";
+        m_messageIsError = true;
+    }
 }
 
 void DemoScene::startCheckAnimation(const std::string& email, const std::string& user) {
@@ -415,7 +448,7 @@ void DemoScene::drawForm(Framebuffer& fb) {
     const i32 tw = font5x7::measure(title, titleScale);
     const i32 tx = er.x + (er.w - tw) / 2;
     font5x7::drawText(fb, tx, er.y - 62, title, kText, titleScale);
-    fb.fillRect({tx, er.y - 62 + font5x7::kGlyphH * titleScale + 8, tw, 2}, kAccent);
+    fb.fillRect({tx, er.y - 62 + textr::glyphHeight(titleScale) + 8, tw, 2}, kAccent);
 
     // --- etiquetas y campos ---
     const Recti ur = m_userName.rect();
@@ -446,7 +479,7 @@ void DemoScene::drawForm(Framebuffer& fb) {
                                : "1. VERIFICAR DISPOSITIVO";
         const i32 vw = font5x7::measure(vt, 1);
         font5x7::drawText(fb, m_verifyBtnRect.x + (m_verifyBtnRect.w - vw) / 2,
-                          m_verifyBtnRect.y + (m_verifyBtnRect.h - font5x7::kGlyphH) / 2,
+                          m_verifyBtnRect.y + (m_verifyBtnRect.h - textr::glyphHeight(1)) / 2,
                           vt, m_verifyHover ? kWhite : (hecho ? kOk : kTurquoise), 1);
     }
 
@@ -497,10 +530,34 @@ void DemoScene::drawForm(Framebuffer& fb) {
     const i32 fw = font5x7::measure(foot, 1);
     font5x7::drawText(fb, (fb.width() - fw) / 2, fb.height() - 28, foot, kDim, 1);
 
-    // Atajo B: buscar una cuenta ya guardada en el sistema.
-    const char* atajoB = "Pulsa B para buscar tu cuenta guardada";
-    const i32 bw = font5x7::measure(atajoB, 1);
-    font5x7::drawText(fb, (fb.width() - bw) / 2, fb.height() - 14, atajoB, kOk, 1);
+    // --- boton BUSCAR CUENTA, en el lado derecho ---
+    if (m_searchBtnRect.w > 0) {
+        const Recti r = m_searchBtnRect;
+
+        // Verde y rojo combinandose: una onda seno mezcla ambos de forma
+        // continua, sin saltos, para que el boton "respire" en vez de
+        // parpadear entre dos colores planos.
+        const f32 t = 0.5f + 0.5f * std::sin(static_cast<f32>(m_searchAnimTime) * 2.4f);
+        auto mezcla = [&](u8 a, u8 b) {
+            return static_cast<u8>(a + (b - a) * t);
+        };
+        const Color animColor{ mezcla(kOk.r, kAccent.r),
+                               mezcla(kOk.g, kAccent.g),
+                               mezcla(kOk.b, kAccent.b) };
+
+        const bool down = (m_searchDown && m_searchHover);
+        fb.fillRect(r, down ? kClosePress : (m_searchHover ? animColor : kFieldBg));
+        fb.drawRect(r, animColor, 2);
+
+        const char* label = "BUSCAR CUENTA";
+        // Se reduce la escala si no cabe, en vez de desbordar el boton.
+        i32 esc = 1;
+        while (esc > 1 && font5x7::measure(label, esc) > r.w - 16) --esc;
+        const i32 lw = font5x7::measure(label, esc);
+        font5x7::drawText(fb, r.x + (r.w - lw) / 2,
+                          r.y + (r.h - textr::glyphHeight(esc)) / 2,
+                          label, m_searchHover ? kWhite : animColor, esc);
+    }
 }
 
 void DemoScene::drawVerifyPanel(Engine& engine, Framebuffer& fb) {
@@ -554,7 +611,7 @@ void DemoScene::drawVerifyPanel(Engine& engine, Framebuffer& fb) {
         const char* t = busy ? "CIFRANDO..." : "CONFIRMAR";
         const i32 tw = font5x7::measure(t, 2);
         font5x7::drawText(fb, m_verifyOkRect.x + (m_verifyOkRect.w - tw) / 2,
-                          m_verifyOkRect.y + (m_verifyOkRect.h - font5x7::kGlyphH * 2) / 2,
+                          m_verifyOkRect.y + (m_verifyOkRect.h - textr::glyphHeight(2)) / 2,
                           t, busy ? kDim : kWhite, 2);
     }
 
@@ -619,9 +676,12 @@ void DemoScene::runVerification(Engine& engine) {
     m_deviceVerified = true;
     m_deviceKind     = tipo;
 
-    m_verifyMsg    = "Dispositivo verificado (" + tipo + "). Ya puedes entrar.";
-    m_verifyMsgErr = false;
-    m_message      = "Dispositivo verificado. Pulsa GUARDAR Y ENTRAR.";
+    // Cifradas las 3 claves, se cierra la seccion de verificacion y se vuelve
+    // al formulario, con GUARDAR Y ENTRAR ya desbloqueado y el foco listo para
+    // entrar directamente.
+    m_verifyOpen = false;
+    m_verifyMsg.clear();
+    m_message      = "Dispositivo verificado (" + tipo + "). Pulsa GUARDAR Y ENTRAR.";
     m_messageIsError = false;
 }
 
