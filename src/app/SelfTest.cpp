@@ -6704,6 +6704,61 @@ void SelfTest::update(Engine& engine, f64 dt) {
                       devcatalog::getPending(kCat1, "Mi Primer Juego")
                           .archive.empty(), "");
 
+                // --- guardado por CODIGO, subido por NOMBRE ---
+                //
+                // BUG QUE ESTO PROTEGE: GUARDAR ARCHIVOS identifica el juego
+                // por codigo. Con un juego nuevo ese codigo no corresponde
+                // a nada publicado, asi que el pendiente se anotaba con el
+                // PROPIO CODIGO como nombre. Luego SUBIR JUEGO lo buscaba
+                // por el nombre escrito y no lo encontraba: seguia pidiendo
+                // subir los archivos aunque acabaran de guardarse.
+                {
+                    DeleteFileW(kCat1);
+                    DeleteFileW(L"primero.t95.pendientes");
+
+                    const std::string nom = "Juego Con Codigo";
+                    const std::string cod = devcatalog::makeGameCode(nom);
+
+                    devcatalog::Pending pc;
+                    pc.game    = cod;          // <- guardado bajo el CODIGO
+                    pc.archive = L"c.tomate";
+                    pc.files   = 5;
+                    std::string errC;
+                    devcatalog::setPending(kCat1, pc, errC);
+
+                    std::snprintf(buf, sizeof(buf), "codigo='%s'", cod.c_str());
+                    check("Los archivos guardados por codigo SI cuentan",
+                          devcatalog::hasArchive(kCat1, nom), buf);
+
+                    // Y el codigo con '#' o en minusculas vale igual.
+                    DeleteFileW(L"primero.t95.pendientes");
+                    devcatalog::Pending pc2 = pc;
+                    pc2.game = "#" + cod;
+                    devcatalog::setPending(kCat1, pc2, errC);
+                    check("Con '#' delante tambien",
+                          devcatalog::hasArchive(kCat1, nom), buf);
+
+                    // Al publicar, el juego adopta ese paquete y el
+                    // pendiente se consume: si no, se quedaria ahi siempre.
+                    errC.clear();
+                    check("El juego se publica",
+                          devcatalog::publish(kCat1, nom, L"j.exe", errC),
+                          errC.c_str());
+
+                    const std::vector<devcatalog::Game> cc =
+                        devcatalog::load(kCat1);
+                    check("Y hereda el paquete guardado por codigo",
+                          cc.size() == 1 && cc[0].current() &&
+                          !cc[0].current()->archive.empty(),
+                          std::to_string(cc.size()));
+                    check("El pendiente bajo codigo se consume",
+                          devcatalog::pendings(kCat1).empty(),
+                          std::to_string(devcatalog::pendings(kCat1).size()));
+
+                    DeleteFileW(kCat1);
+                    DeleteFileW(L"primero.t95.pendientes");
+                }
+
                 // GRATIS es un precio decidido, no un "sin poner": los dos
                 // valen 0 y solo el flag los distingue.
                 DeleteFileW(kCat1);

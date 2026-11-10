@@ -1554,6 +1554,31 @@ namespace devcatalog {
 
 namespace {
 
+/// Normaliza un codigo para compararlo: sin espacios, sin '#' y en
+/// mayusculas. Quien copia un codigo de una lista arrastra espacios o lo
+/// escribe en minusculas, y eso no deberia impedir encontrar su juego.
+std::string normalizaCodigo(const std::string& s) {
+    std::string r;
+    for (const char c : s) {
+        if (c == ' ' || c == '\t' || c == '#') continue;
+        r.push_back(static_cast<char>(std::toupper(
+            static_cast<unsigned char>(c))));
+    }
+    return r;
+}
+
+/// true si los dos textos son el mismo codigo. Ninguno vacio cuenta: dos
+/// campos sin rellenar no deben parecer el mismo juego.
+bool sameCode(const std::string& a, const std::string& b) {
+    const std::string na = normalizaCodigo(a);
+    return !na.empty() && na == normalizaCodigo(b);
+}
+
+/// Registro de paquetes guardados de juegos aun sin publicar. Se declara
+/// aqui porque `publish` la necesita y se define mas abajo, junto al resto
+/// del manejo de pendientes.
+std::vector<Pending> loadPendings(const std::wstring& path);
+
 /// Escribe el catalogo entero. Es la unica ruta de escritura: publish(),
 /// addVersion() y setPrice() cargan, modifican y vuelven aqui, de modo que el
 /// formato en disco se define en un solo sitio.
@@ -1699,24 +1724,11 @@ std::string makeGameCode(const std::string& name) {
 }
 
 std::string findByCode(const std::wstring& path, const std::string& code) {
-    // Se normaliza lo pegado: sin espacios, en mayusculas y sin el '#'. Quien
-    // copia un codigo de una lista arrastra espacios o lo escribe en
-    // minusculas, y eso no deberia impedir encontrar su juego.
-    auto limpia = [](const std::string& s) {
-        std::string r;
-        for (const char c : s) {
-            if (c == ' ' || c == '\t' || c == '#') continue;
-            r.push_back(static_cast<char>(std::toupper(
-                static_cast<unsigned char>(c))));
-        }
-        return r;
-    };
-
-    const std::string buscado = limpia(code);
+    const std::string buscado = normalizaCodigo(code);
     if (buscado.empty()) return std::string();
 
     for (const auto& g : load(path))
-        if (limpia(g.code) == buscado) return g.name;
+        if (normalizaCodigo(g.code) == buscado) return g.name;
     return std::string();
 }
 
@@ -1950,7 +1962,23 @@ bool publish(const std::wstring& path, const std::string& name,
     // la version recien creada los adopta ahora. Y con ellos el precio, si lo
     // puso mientras el juego aun no existia: aceptarselo entonces y perderlo
     // al publicar seria peor que no haberselo dejado poner.
-    const Pending pend = getPending(path, name);
+    // El pendiente puede estar anotado con el NOMBRE o, si el juego aun no
+    // existia al guardarlo, con su CODIGO: GUARDAR ARCHIVOS identifica por
+    // codigo y entonces no habia nombre al que asociarlo. Se busca por los
+    // dos, o los archivos recien guardados se quedarian huerfanos justo al
+    // publicar, que es cuando mas duele.
+    Pending pend = getPending(path, name);
+    if (pend.archive.empty()) {
+        const std::string det = makeGameCode(name);
+        for (const Pending& q : loadPendings(path)) {
+            if (q.archive.empty()) continue;
+            if (sameCode(q.game, det) || sameCode(q.game, g.code)) {
+                pend = q;
+                break;
+            }
+        }
+    }
+
     if (!pend.archive.empty() || pend.priceSet) {
         bool adoptado = true;
         std::string ignorado;
@@ -1962,7 +1990,10 @@ bool publish(const std::wstring& path, const std::string& name,
         if (pend.priceSet)
             setPrice(path, name, Price{ pend.price }, ignorado);
 
-        if (adoptado) clearPending(path, name);
+        // Se borra por la clave con la que de verdad quedo anotado: si fue
+        // bajo el codigo, limpiar por el nombre no quitaria nada y el
+        // pendiente seguiria ahi para siempre.
+        if (adoptado) clearPending(path, pend.game.empty() ? name : pend.game);
     }
     return true;
 }
@@ -2156,7 +2187,20 @@ namespace {
 /// ahora lleva dos mas para el precio. Un archivo viejo sigue valiendo: lo
 /// que falte se queda en su valor por defecto, que es "precio sin decidir".
 bool parsePendingLine(const std::string& line, Pending& out) {
-    if (line.empty() || line[0] == '#') return false;
+    if (line.empty()) return false;
+
+    // Una linea de COMENTARIO empieza por '#' y no lleva separadores. Un
+    // registro tambien puede empezar por '#' -- es lo normal cuando el juego
+    // se guardo por su codigo, que lo lleva delante --, asi que descartar
+    // todo lo que empiece por '#' se comia esos registros.
+    //
+    // BUG QUE ESTO ARREGLA: los archivos guardados de un juego nuevo se
+    // escribian bien pero no se volvian a leer nunca. SUBIR JUEGO seguia
+    // pidiendo subirlos, y el paquete quedaba huerfano para siempre.
+    //
+    // Se distingue por el contenido, no por el primer caracter: un registro
+    // tiene al menos los cuatro campos separados por '|'.
+    if (line[0] == '#' && line.find('|') == std::string::npos) return false;
 
     std::vector<std::string> f;
     size_t ini = 0;
@@ -2251,7 +2295,33 @@ bool hasArchive(const std::wstring& path, const std::string& name) {
 
     // Tambien cuenta lo guardado antes de publicar: para el autor es el mismo
     // trabajo hecho, y es el orden natural (guardar y luego subir).
-    return !getPending(path, name).archive.empty();
+    if (!getPending(path, name).archive.empty()) return true;
+
+    // --- y lo guardado bajo su CODIGO ---
+    //
+    // BUG QUE ESTO ARREGLA: GUARDAR ARCHIVOS identifica el juego por codigo.
+    // Con un juego nuevo ese codigo no corresponde a nada publicado todavia,
+    // asi que el pendiente se anotaba con el PROPIO CODIGO como nombre
+    // ("#5EJ5YA3N3Q5UB4A"). Despues, SUBIR JUEGO lo buscaba por el NOMBRE
+    // que el autor escribe ("Mi Juego") y no lo encontraba: pedia subir los
+    // archivos aunque acabaran de guardarse.
+    //
+    // Se resuelve por los dos caminos que relacionan nombre y codigo:
+    //   - la RESERVA, si el autor pidio el codigo desde el catalogo;
+    //   - el codigo DETERMINISTA que `makeGameCode` deriva del nombre.
+    const std::string det = makeGameCode(name);
+    for (const Pending& p : loadPendings(path)) {
+        if (p.archive.empty()) continue;
+        if (sameCode(p.game, det)) return true;
+    }
+    for (const Reserva& r : reservations(path)) {
+        if (r.game != name) continue;
+        for (const Pending& p : loadPendings(path)) {
+            if (p.archive.empty()) continue;
+            if (sameCode(p.game, r.code)) return true;
+        }
+    }
+    return false;
 }
 
 bool addVersion(const std::wstring& path, const std::string& name,
