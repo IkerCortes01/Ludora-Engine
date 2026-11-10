@@ -903,6 +903,9 @@ private:
     /// Existe para que abrirla a mano y abrirla sola -- como hace el guardado
     /// al terminar -- den exactamente el mismo estado.
     void openDevPanel(i32 panel);
+    /// Juego con archivos guardados pero sin publicar ("" si no hay). Es a
+    /// quien se le pone precio cuando todavia no existe en el catalogo.
+    std::string firstPendingGame() const;
     /// Traduce el codigo resuelto al indicador de m_updFound.
     void lookupUpdateGame();
     /// Registra la version en el catalogo y el historial, tras empaquetarla.

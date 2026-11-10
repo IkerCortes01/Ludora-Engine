@@ -440,6 +440,18 @@ struct Pending {
     std::wstring archive; // paquete
     i32          files = 0;
     u64          bytes = 0;
+
+    /// Precio puesto ANTES de publicar el juego.
+    ///
+    /// Con los archivos ya guardados, poner precio es el paso natural
+    /// siguiente, y el autor no tiene por que publicar primero para que se
+    /// le acepte. Se guarda aqui y `publish` lo adopta junto con el paquete.
+    ///
+    /// `priceSet` distingue "gratis" de "sin decidir": los dos valen 0 en
+    /// `price`, y sin el flag un juego de pago publicado despues heredaria
+    /// un cero que nadie escribio.
+    i32  price    = 0;    // centavos de dolar
+    bool priceSet = false;
 };
 
 /// Codigo RESERVADO para un juego que todavia no se ha publicado.
@@ -472,6 +484,13 @@ void clearReservation(const std::wstring& path, const std::string& name);
 
 /// Anota un paquete pendiente (sustituye al anterior del mismo juego).
 bool setPending(const std::wstring& path, const Pending& p, std::string& error);
+/// Todos los paquetes pendientes, en el orden en que se guardaron.
+///
+/// La interfaz la necesita para el caso del PRIMER juego: con los archivos
+/// ya guardados pero nada publicado todavia, el catalogo esta vacio y sin
+/// esto no habria forma de saber a que juego poner precio.
+std::vector<Pending> pendings(const std::wstring& path);
+
 /// Devuelve el pendiente de ese juego, o un Pending vacio si no hay.
 Pending getPending(const std::wstring& path, const std::string& name);
 /// Olvida el pendiente de ese juego.

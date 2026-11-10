@@ -6061,8 +6061,52 @@ void HomeScene::updateDev(Engine& engine, f64 dt) {
 
                 // Fija el precio del juego vigente, igual que soltar el
                 // deslizador, pero de forma explicita.
-                if (m_devGames.empty()) {
-                    m_devMsg    = "Primero publica un juego con SUBIR JUEGO.";
+                //
+                // --- el PRIMER juego tambien cuenta ---
+                //
+                // BUG QUE ESTO ARREGLA: con el catalogo vacio se respondia
+                // "primero publica un juego con SUBIR JUEGO", aunque los
+                // archivos YA estuvieran guardados. Y SUBIR JUEGO, a su vez,
+                // exige el precio antes de publicar: las dos secciones se
+                // mandaban la una a la otra y no habia forma de salir.
+                //
+                // Con los archivos guardados hay un pendiente con el nombre
+                // del juego, asi que el precio se le anota a el y `publish`
+                // lo adopta. El orden natural -- guardar, poner precio,
+                // subir -- vuelve a funcionar.
+                const std::string juegoPend = firstPendingGame();
+                if (m_devGames.empty() && !juegoPend.empty()) {
+                    std::string err;
+                    devcatalog::Pending p =
+                        devcatalog::getPending(kDevCatalogFile, juegoPend);
+                    p.game     = juegoPend;
+                    p.price    = priceUsdCents();
+                    p.priceSet = true;
+
+                    if (devcatalog::setPending(kDevCatalogFile, p, err)) {
+                        std::string usd, mxn, eur;
+                        devcatalog::formatPrice(priceUsdCents(), usd, mxn, eur);
+                        m_devMsg    = "Precio aceptado: " + usd +
+                                      ". Ya puedes subir el juego.";
+                        m_devMsgErr = false;
+
+                        // El precio queda dado por bueno: SUBIR JUEGO ya no
+                        // volvera a pedirlo. Y la palomita encadena con esa
+                        // seccion igual que en el caso del juego ya
+                        // publicado, para que los dos caminos acaben donde
+                        // toca sin que el autor busque el boton.
+                        m_priceAccepted = true;
+                        m_priceOkAnim   = 0.0;
+                        m_priceOkAnimOn = true;
+                    } else {
+                        m_devMsg    = err.empty()
+                                    ? "No se pudo guardar el precio." : err;
+                        m_devMsgErr = true;
+                    }
+                } else if (m_devGames.empty()) {
+                    // Sin juegos NI archivos guardados no hay a que ponerle
+                    // precio. Se dice lo que falta de verdad.
+                    m_devMsg    = "Guarda primero los archivos del juego.";
                     m_devMsgErr = true;
                 } else {
                     const std::string juego = m_devGames.front().name;
@@ -6132,6 +6176,15 @@ void HomeScene::updateDev(Engine& engine, f64 dt) {
         }
         m_devDown = -1;
     }
+}
+
+std::string HomeScene::firstPendingGame() const {
+    // Juego que tiene archivos guardados pero aun no esta publicado. Es el
+    // caso del PRIMER juego: el catalogo esta vacio y el unico rastro del
+    // trabajo hecho es su paquete pendiente.
+    for (const auto& p : devcatalog::pendings(kDevCatalogFile))
+        if (!p.archive.empty()) return p.game;
+    return std::string();
 }
 
 void HomeScene::openDevPanel(i32 panel) {
@@ -6588,7 +6641,14 @@ void HomeScene::submitUpload() {
     // se acepta tambien un deslizador ya movido, para no obligar a volver
     // atras a quien solo fijo el precio y no pulso el boton.
     // "Sin tocar" es el selector en el extremo GRATIS, o sea t = 0.
-    if (!m_priceAccepted && m_priceT <= 0.0f) {
+    //
+    // Tambien cuenta el precio que quedo anotado en el pendiente: un autor
+    // puede haber puesto precio ayer y volver hoy a subir el juego, y
+    // `m_priceAccepted` solo vive mientras Ludora este abierta.
+    const bool precioGuardado =
+        devcatalog::getPending(kDevCatalogFile, nombre).priceSet;
+
+    if (!m_priceAccepted && !precioGuardado && m_priceT <= 0.0f) {
         m_upPriceWarn = 1.2;   // arranca el temblor y el aviso
         m_upWarnOk    = false; // en rojo: es un error
         m_upWarnKind  = kWarnPrice;

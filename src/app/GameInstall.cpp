@@ -1947,12 +1947,22 @@ bool publish(const std::wstring& path, const std::string& name,
     clearReservation(path, name);
 
     // Si el autor guardo los archivos ANTES de publicar -- el orden natural --,
-    // la version recien creada los adopta ahora.
+    // la version recien creada los adopta ahora. Y con ellos el precio, si lo
+    // puso mientras el juego aun no existia: aceptarselo entonces y perderlo
+    // al publicar seria peor que no haberselo dejado poner.
     const Pending pend = getPending(path, name);
-    if (!pend.archive.empty()) {
+    if (!pend.archive.empty() || pend.priceSet) {
+        bool adoptado = true;
         std::string ignorado;
-        if (setArchive(path, name, pend.archive, pend.files, pend.bytes, ignorado))
-            clearPending(path, name);
+
+        if (!pend.archive.empty())
+            adoptado = setArchive(path, name, pend.archive, pend.files,
+                                  pend.bytes, ignorado);
+
+        if (pend.priceSet)
+            setPrice(path, name, Price{ pend.price }, ignorado);
+
+        if (adoptado) clearPending(path, name);
     }
     return true;
 }
@@ -2138,104 +2148,97 @@ void clearReservation(const std::wstring& path, const std::string& name) {
     if (quedan.size() != todas.size()) escribirReservas(path, quedan);
 }
 
-bool setPending(const std::wstring& path, const Pending& p, std::string& error) {
-    if (p.game.empty()) { error = "Falta el nombre del juego."; return false; }
+namespace {
 
-    // Se reescribe entero quitando el del mismo juego: un juego tiene como
-    // mucho un paquete pendiente, el ultimo que guardo.
-    std::vector<Pending> all;
-    {
-        std::ifstream in(pendingPath(path).c_str(), std::ios::binary);
-        std::string line;
-        while (in && std::getline(in, line)) {
-            line = trim(line);
-            if (line.empty() || line[0] == '#') continue;
-            const size_t p1 = line.find('|');
-            if (p1 == std::string::npos) continue;
-            const size_t p2 = line.find('|', p1 + 1);
-            if (p2 == std::string::npos) continue;
-            const size_t p3 = line.find('|', p2 + 1);
-            if (p3 == std::string::npos) continue;
+/// Lee una linea del registro de pendientes.
+///
+/// El formato nacio con cuatro campos (juego|paquete|archivos|bytes) y
+/// ahora lleva dos mas para el precio. Un archivo viejo sigue valiendo: lo
+/// que falte se queda en su valor por defecto, que es "precio sin decidir".
+bool parsePendingLine(const std::string& line, Pending& out) {
+    if (line.empty() || line[0] == '#') return false;
 
-            Pending q;
-            q.game    = unescapeLine(line.substr(0, p1));
-            q.archive = fromUtf8(line.substr(p1 + 1, p2 - p1 - 1));
-            q.files   = std::atoi(line.substr(p2 + 1, p3 - p2 - 1).c_str());
-            q.bytes   = static_cast<u64>(std::atoll(line.substr(p3 + 1).c_str()));
-            if (q.game != p.game) all.push_back(q);
-        }
+    std::vector<std::string> f;
+    size_t ini = 0;
+    while (true) {
+        const size_t b = line.find('|', ini);
+        if (b == std::string::npos) { f.push_back(line.substr(ini)); break; }
+        f.push_back(line.substr(ini, b - ini));
+        ini = b + 1;
     }
-    all.push_back(p);
+    if (f.size() < 4) return false;
 
-    std::ofstream out(pendingPath(path).c_str(), std::ios::binary | std::ios::trunc);
-    if (!out) { error = "No se pudo guardar el registro de archivos."; return false; }
-    out << "# Archivos guardados de juegos aun sin publicar.\r\n";
-    for (const auto& q : all)
-        out << escapeLine(q.game) << "|" << toUtf8(q.archive) << "|"
-            << q.files << "|" << q.bytes << "\r\n";
-    if (!out.good()) { error = "No se pudo guardar el registro de archivos."; return false; }
+    out = Pending{};
+    out.game    = unescapeLine(f[0]);
+    out.archive = fromUtf8(f[1]);
+    out.files   = std::atoi(f[2].c_str());
+    out.bytes   = static_cast<u64>(std::atoll(f[3].c_str()));
+    if (f.size() >= 6) {
+        out.price    = std::atoi(f[4].c_str());
+        out.priceSet = (std::atoi(f[5].c_str()) != 0);
+    }
     return true;
 }
 
-Pending getPending(const std::wstring& path, const std::string& name) {
+/// Carga el registro entero.
+std::vector<Pending> loadPendings(const std::wstring& path) {
+    std::vector<Pending> all;
     std::ifstream in(pendingPath(path).c_str(), std::ios::binary);
     std::string line;
     while (in && std::getline(in, line)) {
-        line = trim(line);
-        if (line.empty() || line[0] == '#') continue;
-        const size_t p1 = line.find('|');
-        if (p1 == std::string::npos) continue;
-        const size_t p2 = line.find('|', p1 + 1);
-        if (p2 == std::string::npos) continue;
-        const size_t p3 = line.find('|', p2 + 1);
-        if (p3 == std::string::npos) continue;
-
-        if (unescapeLine(line.substr(0, p1)) != name) continue;
-
         Pending q;
-        q.game    = name;
-        q.archive = fromUtf8(line.substr(p1 + 1, p2 - p1 - 1));
-        q.files   = std::atoi(line.substr(p2 + 1, p3 - p2 - 1).c_str());
-        q.bytes   = static_cast<u64>(std::atoll(line.substr(p3 + 1).c_str()));
-        return q;
+        if (parsePendingLine(trim(line), q)) all.push_back(q);
     }
+    return all;
+}
+
+/// Vuelca el registro entero, sobrescribiendo.
+bool writePendings(const std::wstring& path, const std::vector<Pending>& all) {
+    std::ofstream out(pendingPath(path).c_str(), std::ios::binary | std::ios::trunc);
+    if (!out) return false;
+    out << "# Archivos guardados de juegos aun sin publicar.\r\n";
+    for (const auto& q : all)
+        out << escapeLine(q.game) << "|" << toUtf8(q.archive) << "|"
+            << q.files << "|" << q.bytes << "|"
+            << q.price << "|" << (q.priceSet ? 1 : 0) << "\r\n";
+    return out.good();
+}
+
+} // namespace
+
+bool setPending(const std::wstring& path, const Pending& p, std::string& error) {
+    if (p.game.empty()) { error = "Falta el nombre del juego."; return false; }
+
+    // Un juego tiene como mucho un paquete pendiente: el ultimo que guardo.
+    std::vector<Pending> all = loadPendings(path);
+    all.erase(std::remove_if(all.begin(), all.end(),
+                             [&](const Pending& q) { return q.game == p.game; }),
+              all.end());
+    all.push_back(p);
+
+    if (!writePendings(path, all)) {
+        error = "No se pudo guardar el registro de archivos.";
+        return false;
+    }
+    return true;
+}
+
+std::vector<Pending> pendings(const std::wstring& path) {
+    return loadPendings(path);
+}
+
+Pending getPending(const std::wstring& path, const std::string& name) {
+    for (const Pending& q : loadPendings(path))
+        if (q.game == name) return q;
     return Pending{};
 }
 
 void clearPending(const std::wstring& path, const std::string& name) {
-    Pending vacio;
-    vacio.game = name;
-    // Se reescribe sin el: setPending con un nombre existente ya lo quita,
-    // asi que basta con leer todo y volcar lo que no sea este.
-    std::vector<Pending> all;
-    {
-        std::ifstream in(pendingPath(path).c_str(), std::ios::binary);
-        std::string line;
-        while (in && std::getline(in, line)) {
-            line = trim(line);
-            if (line.empty() || line[0] == '#') continue;
-            const size_t p1 = line.find('|');
-            if (p1 == std::string::npos) continue;
-            const size_t p2 = line.find('|', p1 + 1);
-            if (p2 == std::string::npos) continue;
-            const size_t p3 = line.find('|', p2 + 1);
-            if (p3 == std::string::npos) continue;
-
-            Pending q;
-            q.game    = unescapeLine(line.substr(0, p1));
-            q.archive = fromUtf8(line.substr(p1 + 1, p2 - p1 - 1));
-            q.files   = std::atoi(line.substr(p2 + 1, p3 - p2 - 1).c_str());
-            q.bytes   = static_cast<u64>(std::atoll(line.substr(p3 + 1).c_str()));
-            if (q.game != name) all.push_back(q);
-        }
-    }
-
-    std::ofstream out(pendingPath(path).c_str(), std::ios::binary | std::ios::trunc);
-    if (!out) return;
-    out << "# Archivos guardados de juegos aun sin publicar.\r\n";
-    for (const auto& q : all)
-        out << escapeLine(q.game) << "|" << toUtf8(q.archive) << "|"
-            << q.files << "|" << q.bytes << "\r\n";
+    std::vector<Pending> all = loadPendings(path);
+    all.erase(std::remove_if(all.begin(), all.end(),
+                             [&](const Pending& q) { return q.game == name; }),
+              all.end());
+    writePendings(path, all);
 }
 
 bool hasArchive(const std::wstring& path, const std::string& name) {

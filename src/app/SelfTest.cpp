@@ -6639,6 +6639,105 @@ void SelfTest::update(Engine& engine, f64 dt) {
                 DeleteFileW(kAvisos);
             }
 
+            // --- EL PRIMER JUEGO: guardar, poner precio, subir ---
+            //
+            // BUG QUE ESTO PROTEGE: con el catalogo vacio, PRECIOS respondia
+            // "primero publica un juego con SUBIR JUEGO", y SUBIR JUEGO
+            // exigia el precio antes de publicar. Las dos secciones se
+            // mandaban la una a la otra y el primer juego no se podia subir
+            // por ningun camino.
+            {
+                const wchar_t* kCat1 = L"primero.t95";
+                DeleteFileW(kCat1);
+                DeleteFileW(L"primero.t95.pendientes");
+
+                // Con el catalogo vacio y archivos guardados queda un
+                // pendiente: es el rastro del trabajo hecho.
+                std::string errP;
+                devcatalog::Pending p0;
+                p0.game    = "Mi Primer Juego";
+                p0.archive = L"paq.tomate";
+                p0.files   = 7;
+                p0.bytes   = 1234;
+                check("Guardar archivos deja un pendiente",
+                      devcatalog::setPending(kCat1, p0, errP), errP.c_str());
+                check("Y el catalogo sigue vacio",
+                      devcatalog::load(kCat1).empty(),
+                      std::to_string(devcatalog::load(kCat1).size()));
+
+                // El precio se le puede poner AHORA, sin publicar antes.
+                devcatalog::Pending p1 =
+                    devcatalog::getPending(kCat1, "Mi Primer Juego");
+                p1.price    = 1999;   // 19.99 USD
+                p1.priceSet = true;
+                errP.clear();
+                check("El precio se guarda sin haber publicado",
+                      devcatalog::setPending(kCat1, p1, errP), errP.c_str());
+
+                const devcatalog::Pending leido =
+                    devcatalog::getPending(kCat1, "Mi Primer Juego");
+                std::snprintf(buf, sizeof(buf), "precio=%d puesto=%d",
+                              leido.price, leido.priceSet ? 1 : 0);
+                check("Y se relee del disco",
+                      leido.price == 1999 && leido.priceSet, buf);
+                check("Sin perder el paquete guardado",
+                      leido.files == 7 && !leido.archive.empty(), buf);
+
+                // Al publicar, el juego adopta paquete Y precio.
+                errP.clear();
+                check("El primer juego se publica",
+                      devcatalog::publish(kCat1, "Mi Primer Juego",
+                                          L"juego.exe", errP),
+                      errP.c_str());
+
+                const std::vector<devcatalog::Game> cat1 =
+                    devcatalog::load(kCat1);
+                std::snprintf(buf, sizeof(buf), "%zu juegos, precio=%d",
+                              cat1.size(),
+                              cat1.empty() ? -1 : cat1[0].price.usdCents);
+                check("Y hereda el precio que se puso antes",
+                      cat1.size() == 1 && cat1[0].price.usdCents == 1999, buf);
+                check("Y tambien el paquete",
+                      !cat1.empty() && cat1[0].current() &&
+                      !cat1[0].current()->archive.empty(), buf);
+                check("El pendiente se consume al publicar",
+                      devcatalog::getPending(kCat1, "Mi Primer Juego")
+                          .archive.empty(), "");
+
+                // GRATIS es un precio decidido, no un "sin poner": los dos
+                // valen 0 y solo el flag los distingue.
+                DeleteFileW(kCat1);
+                DeleteFileW(L"primero.t95.pendientes");
+                devcatalog::Pending g0;
+                g0.game     = "Juego Gratis";
+                g0.archive  = L"g.tomate";
+                g0.price    = 0;
+                g0.priceSet = true;
+                errP.clear();
+                devcatalog::setPending(kCat1, g0, errP);
+                check("GRATIS se distingue de 'sin decidir'",
+                      devcatalog::getPending(kCat1, "Juego Gratis").priceSet,
+                      "");
+
+                // Un registro viejo (sin los campos de precio) se sigue
+                // leyendo: lo que falte queda como "sin decidir".
+                {
+                    std::ofstream vj("primero.t95.pendientes",
+                                     std::ios::binary | std::ios::trunc);
+                    vj << "# Archivos guardados de juegos aun sin publicar.\r\n";
+                    vj << "Juego Viejo|v.tomate|3|999\r\n";
+                }
+                const devcatalog::Pending viejo =
+                    devcatalog::getPending(kCat1, "Juego Viejo");
+                std::snprintf(buf, sizeof(buf), "archivos=%d puesto=%d",
+                              viejo.files, viejo.priceSet ? 1 : 0);
+                check("Un registro de antes se sigue leyendo",
+                      viejo.files == 3 && !viejo.priceSet, buf);
+
+                DeleteFileW(kCat1);
+                DeleteFileW(L"primero.t95.pendientes");
+            }
+
             // --- el guardado avisa ANTES en vez de fallar a mitad ---
             //
             // Lo caro de guardar es leer la carpeta entera. Si algo va a
