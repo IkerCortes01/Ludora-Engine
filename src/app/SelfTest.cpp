@@ -11,6 +11,7 @@
 #include "app/Session.h"
 #include "app/GameInstall.h"
 #include "app/TomatePack.h"
+#include "app/Guardian.h"
 #include "app/VirtualFileSystem.h"
 #include "app/Font5x7.h"
 #include "app/TextRender.h"
@@ -7001,6 +7002,185 @@ void SelfTest::update(Engine& engine, f64 dt) {
                 borrarArbol(kDir);
                 borrarArbol(kOut);
                 DeleteFileW(kPak);
+            }
+
+            // --- con los archivos ya guardados, se puede PUBLICAR ---
+            //
+            // EL BUG, tal como lo vivio el autor: GENERAR CODIGO da un codigo
+            // ALEATORIO, y GUARDAR ARCHIVOS anota el paquete bajo ese codigo
+            // porque el juego aun no tiene nombre -- el nombre se escribe
+            // despues, al subirlo. Al publicar se buscaba el paquete por el
+            // codigo DETERMINISTA derivado del nombre (otro codigo distinto) o
+            // por una reserva (que no existia), asi que nunca se encontraba:
+            // se seguia pidiendo subir unos archivos que ya estaban subidos.
+            {
+                const wchar_t* kCatP = L"pub.t95.dat";
+                DeleteFileW(kCatP);
+                DeleteFileW(L"pub.t95.dat.pendientes");
+
+                // Un paquete que EXISTE en disco: un registro que apunta a un
+                // archivo borrado no debe dar luz verde.
+                const wchar_t* kPaq = L"pub.t95.tomate";
+                { std::ofstream f(kPaq, std::ios::binary); f << "paquete"; }
+
+                const std::string codigo = devcatalog::randomGameCode(kCatP);
+                std::snprintf(buf, sizeof(buf), "codigo %s (%zu caracteres)",
+                              codigo.c_str(), codigo.size());
+                check("GENERAR CODIGO da un codigo aleatorio largo",
+                      codigo.size() == 16, buf);   // '#' + 15
+
+                devcatalog::Pending pp;
+                pp.game    = codigo;          // anotado por CODIGO, sin nombre
+                pp.archive = kPaq;
+                pp.files   = 4826;
+                pp.bytes   = 1109861783ull;
+                std::string errP;
+                check("Los archivos se guardan bajo ese codigo",
+                      devcatalog::setPending(kCatP, pp, errP), errP.c_str());
+
+                check("Y el catalogo sigue vacio (nada publicado aun)",
+                      devcatalog::load(kCatP).empty(), "");
+
+                // Lo que fallaba: el autor escribe el nombre y se le pide
+                // subir los archivos otra vez.
+                const std::string nomP = "Mi Primer Juego";
+                check("Con los archivos guardados, YA permite publicar",
+                      devcatalog::hasArchive(kCatP, nomP),
+                      "antes pedia subirlos de nuevo");
+
+                check("Y los reconoce como paquete sin dueno",
+                      !devcatalog::unclaimedArchive(kCatP).archive.empty(), "");
+
+                // Publicar tiene que ADOPTAR ese paquete: si no, el juego
+                // quedaria publicado sin archivos y nadie podria descargarlo.
+                errP.clear();
+                const bool okPubP =
+                    devcatalog::publish(kCatP, nomP, L"Juego.exe", errP);
+                check("El juego se publica", okPubP, errP.c_str());
+
+                const std::vector<devcatalog::Game> catP = devcatalog::load(kCatP);
+                bool conArch = false;
+                if (!catP.empty() && !catP[0].versions.empty()) {
+                    const auto& vP = catP[0].versions.back();
+                    conArch = !vP.archive.empty() && vP.archiveFiles == 4826;
+                    std::snprintf(buf, sizeof(buf), "archivos=%d bytes=%llu",
+                                  vP.archiveFiles,
+                                  static_cast<unsigned long long>(vP.archiveBytes));
+                }
+                check("Y queda publicado CON sus archivos", conArch, buf);
+
+                check("El pendiente se consumio al publicarlo",
+                      devcatalog::unclaimedArchive(kCatP).archive.empty(), "");
+
+                // Y lo que NO debe pasar: dar luz verde sin tener nada.
+                const wchar_t* kCatQ = L"pub.t95b.dat";
+                DeleteFileW(kCatQ);
+                DeleteFileW(L"pub.t95b.dat.pendientes");
+                check("Sin archivos guardados, sigue pidiendolos",
+                      !devcatalog::hasArchive(kCatQ, "Juego Sin Archivos"), "");
+
+                // Un registro cuyo paquete ya no esta en el disco tampoco
+                // cuenta: publicarlo daria un juego que nadie puede descargar.
+                devcatalog::Pending roto;
+                roto.game    = devcatalog::randomGameCode(kCatQ);
+                roto.archive = L"no.existe.t95.tomate";
+                roto.files   = 7;
+                roto.bytes   = 99;
+                errP.clear();
+                devcatalog::setPending(kCatQ, roto, errP);
+                check("Un paquete que ya no esta en el disco NO cuenta",
+                      !devcatalog::hasArchive(kCatQ, "Juego Con Paquete Borrado"),
+                      "");
+
+                DeleteFileW(kCatP);
+                DeleteFileW(L"pub.t95.dat.pendientes");
+                DeleteFileW(kCatQ);
+                DeleteFileW(L"pub.t95b.dat.pendientes");
+                DeleteFileW(kPaq);
+            }
+
+            // --- la revision de seguridad de las descargas ---
+            //
+            // No es un antivirus propio: le pasa el contenido al antivirus que
+            // ya tiene el equipo (por AMSI) y anade comprobaciones propias de
+            // una plataforma de juegos. Lo que se prueba aqui es que no deja
+            // pasar lo evidente y que no inventa amenazas en un juego normal.
+            {
+                const wchar_t* kG = L"guard.t96";
+                auto borrarG = [](const wchar_t* d) {
+                    std::wstring from(d);
+                    from.push_back(L'\0'); from.push_back(L'\0');
+                    SHFILEOPSTRUCTW op{};
+                    op.wFunc = FO_DELETE; op.pFrom = from.c_str();
+                    op.fFlags = FOF_NO_UI | FOF_NOCONFIRMATION | FOF_NOERRORUI;
+                    SHFileOperationW(&op);
+                };
+                borrarG(kG);
+
+                // Un juego normal: no debe dar ni un hallazgo.
+                CreateDirectoryW(kG, nullptr);
+                CreateDirectoryW(L"guard.t96\\assets", nullptr);
+                {
+                    std::ofstream(L"guard.t96\\Juego.exe", std::ios::binary)
+                        << "MZ" << std::string(600, '\x90');
+                    std::ofstream(L"guard.t96\\motor.dll", std::ios::binary)
+                        << "MZ" << std::string(400, '\x01');
+                    std::ofstream(L"guard.t96\\assets\\tex.png", std::ios::binary)
+                        << "\x89PNG\r\n\x1a\n" << std::string(900, '\x40');
+                    std::ofstream(L"guard.t96\\conf.json", std::ios::binary)
+                        << "{\"v\":1}";
+                }
+
+                const guardian::Informe limpio = guardian::revisarCarpeta(kG);
+                check("La revision de un juego normal termina",
+                      limpio.hecho, limpio.resumen().c_str());
+                check("Y no lo bloquea", !limpio.bloqueado(), "");
+                std::snprintf(buf, sizeof(buf), "%d archivos, %zu hallazgos",
+                              limpio.archivos, limpio.hallazgos.size());
+                check("Ni inventa amenazas donde no hay",
+                      limpio.hallazgos.empty(), buf);
+
+                // Un ejecutable disfrazado de imagen: el truco mas comun, y la
+                // comprobacion que un antivirus por extension no hace.
+                {
+                    std::ofstream(L"guard.t96\\assets\\logo.png", std::ios::binary)
+                        << "MZ" << std::string(1200, '\x90');
+                }
+                const guardian::Informe disfraz = guardian::revisarCarpeta(kG);
+                check("Un .exe disfrazado de .png se detecta y BLOQUEA",
+                      disfraz.bloqueado(), disfraz.resumen().c_str());
+
+                bool dice = false;
+                for (const auto& h : disfraz.hallazgos)
+                    if (h.archivo.find(L"logo.png") != std::wstring::npos)
+                        dice = true;
+                check("Y el informe dice QUE archivo era", dice, "");
+                DeleteFileW(L"guard.t96\\assets\\logo.png");
+
+                // Un script de instalacion: se avisa, pero no se bloquea --
+                // eso lo decide el jugador.
+                {
+                    std::ofstream(L"guard.t96\\instalar.bat", std::ios::binary)
+                        << "@echo off\n";
+                }
+                const guardian::Informe script = guardian::revisarCarpeta(kG);
+                check("Un script dentro del juego se avisa",
+                      !script.hallazgos.empty(), script.resumen().c_str());
+                check("Pero no bloquea la instalacion por si solo",
+                      !script.bloqueado(), "");
+
+                // Un bloque limpio no debe dar hallazgos por el camino de
+                // "mientras descarga".
+                {
+                    const std::string datos(40000, 'A');
+                    std::vector<guardian::Hallazgo> hs;
+                    check("Un bloque limpio pasa la revision al vuelo",
+                          guardian::revisarBloque(
+                              reinterpret_cast<const u8*>(datos.data()),
+                              datos.size(), L"bloque", hs) && hs.empty(), "");
+                }
+
+                borrarG(kG);
             }
 
             // --- guardar PUBLICA la version, sin un segundo boton ---

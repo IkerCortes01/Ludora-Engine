@@ -1570,6 +1570,15 @@ private:
     f64   m_prodBuyMsgTime = 0.0;
     std::string m_prodBuyMsg;
     bool  m_prodBuyMsgErr = false;
+
+    /// Resultado de la revision de seguridad de la ultima descarga.
+    ///
+    /// Vive aqui, y no en una variable local, porque el aviso de la descarga
+    /// se arma en un sitio y se redacta en otro: el juego se revisa antes de
+    /// registrarlo en la biblioteca, y el mensaje final se compone cuando ya
+    /// esta registrado.
+    std::string m_prodScanMsg;
+    bool        m_prodScanAviso = false;
     ScrollPanel m_prodReviewsPanel;     // resenas, abajo y con scroll
     ScrollPanel m_prodSidePanel;        // la franja derecha tambien desplaza
 

@@ -83,16 +83,30 @@ bool sealFolder(const std::wstring& srcDir,
                 std::string&        error,
                 const std::atomic<bool>* cancel = nullptr);
 
+/// Revisa un bloque ya descifrado, MIENTRAS se instala.
+///
+/// Devolver false aborta la extraccion: es como se corta una descarga en la
+/// que se ha encontrado algo, sin esperar a que termine de escribirse.
+/// `motivo` explica por que, para podérselo decir al usuario.
+using Inspector = std::function<bool(const u8* datos, size_t n,
+                                     std::string& motivo)>;
+
 /// Deshace sealFolder() sobre `destDir`.
 ///
 /// Verifica cada bloque antes de escribir nada suyo, asi que un paquete
 /// alterado se detecta en vez de instalarse a medias.
+///
+/// `inspector` (opcional) ve cada bloque ya descifrado ANTES de que llegue al
+/// disco. Es lo que permite analizar el juego mientras se instala en vez de
+/// hacer una segunda pasada al final: los datos ya estan en memoria y
+/// descomprimidos, asi que mirarlos aqui no cuesta ni una lectura mas.
 bool unsealFolder(const std::wstring& srcPath,
                   const std::wstring& destDir,
                   const std::string&  secret,
                   std::atomic<float>* progress,
                   std::string&        error,
-                  const std::atomic<bool>* cancel = nullptr);
+                  const std::atomic<bool>* cancel = nullptr,
+                  const Inspector&         inspector = Inspector());
 
 /// true si el archivo es un paquete v3 (empieza por su marca). Sirve para
 /// decidir si abrirlo con este codigo o con el lector del formato viejo.

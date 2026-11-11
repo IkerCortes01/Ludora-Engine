@@ -1,5 +1,6 @@
 #pragma once
 #include "core/Types.h"
+#include "app/TomatePack.h"
 #include <atomic>
 #include <functional>
 #include <string>
@@ -96,6 +97,19 @@ bool sealWholeFolder(const std::wstring& srcDir,
 bool unsealWholeFolder(const std::wstring& srcVault,
                        const std::wstring& destDir,
                        std::string& error);
+
+/// Igual que unsealWholeFolder, pero revisando el contenido MIENTRAS se
+/// extrae: `inspector` ve cada bloque ya descifrado antes de que llegue al
+/// disco, y devolver false corta la instalacion ahi mismo.
+///
+/// Es lo que permite analizar un juego durante la descarga en vez de esperar a
+/// tenerlo entero en el disco para revisarlo luego. Con un paquete del formato
+/// antiguo no hay bloques que inspeccionar, asi que se extrae y le toca a
+/// quien llama revisar la carpeta.
+bool unsealWholeFolderScanned(const std::wstring& srcVault,
+                              const std::wstring& destDir,
+                              std::string& error,
+                              const tomatepack::Inspector& inspector);
 
 /// Cuenta los archivos de un arbol y suma su tamano. Sirve para decirle al
 /// autor QUE se va a guardar antes de guardarlo, y para avisar si la carpeta
@@ -506,6 +520,20 @@ std::vector<Pending> pendings(const std::wstring& path);
 Pending getPending(const std::wstring& path, const std::string& name);
 /// Olvida el pendiente de ese juego.
 void clearPending(const std::wstring& path, const std::string& name);
+
+/// Paquete guardado que AUN NO pertenece a ningun juego publicado.
+///
+/// Resuelve el caso del juego nuevo: GENERAR CODIGO da un codigo aleatorio y
+/// GUARDAR ARCHIVOS anota el paquete bajo ese codigo, porque el nombre todavia
+/// no existe -- se escribe despues, al subirlo. Como un codigo aleatorio no se
+/// deriva del nombre ni hay reserva que los una, no habia forma de relacionar
+/// el paquete con el juego, y al publicar se pedia subir unos archivos que ya
+/// estaban guardados.
+///
+/// Si un paquete no es de ningun juego publicado, es del que se esta subiendo
+/// ahora. Devuelve un Pending vacio si no hay ninguno libre, o si el archivo al
+/// que apunta ya no esta en disco.
+Pending unclaimedArchive(const std::wstring& path);
 
 /// Limites de los campos numericos de la ficha. Viven aqui, junto al modelo,
 /// para que la interfaz y la validacion no puedan discrepar.

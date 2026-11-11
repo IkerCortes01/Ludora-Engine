@@ -1453,7 +1453,8 @@ bool unsealFolder(const std::wstring& srcPath,
                   const std::string&  secret,
                   std::atomic<float>* progress,
                   std::string&        error,
-                  const std::atomic<bool>* cancel) {
+                  const std::atomic<bool>* cancel,
+                  const Inspector&         inspector) {
     File f;
     if (!f.openRead(srcPath)) {
         error = "No se encontro el paquete de archivos del juego.";
@@ -1490,6 +1491,23 @@ bool unsealFolder(const std::wstring& srcPath,
     };
 
     auto consumir = [&](u64 /*index*/, std::vector<u8>& plain) -> bool {
+        // --- la revision va ANTES de escribir ---
+        //
+        // El bloque ya esta descifrado y descomprimido en memoria, asi que
+        // mirarlo aqui no cuesta ni una lectura de disco de mas: es analizar
+        // "mientras se instala" en el sentido literal. Y si hay algo, se corta
+        // antes de que ese contenido toque el disco del jugador.
+        if (inspector && !plain.empty()) {
+            std::string motivo;
+            if (!inspector(plain.data(), plain.size(), motivo)) {
+                error = motivo.empty()
+                    ? std::string("La revision de seguridad detuvo la "
+                                  "instalacion del juego.")
+                    : motivo;
+                return false;
+            }
+        }
+
         size_t off = 0;
         while (off < plain.size()) {
             // Saltar archivos de tamano 0: hay que crearlos, pero no consumen

@@ -905,6 +905,24 @@ bool restoreData(const std::wstring& srcVault, const std::wstring& destDir,
     return true;
 }
 
+bool unsealWholeFolderScanned(const std::wstring& srcVault,
+                              const std::wstring& destDir,
+                              std::string& error,
+                              const tomatepack::Inspector& inspector) {
+    // Solo el formato nuevo puede revisarse al vuelo: trabaja por bloques, asi
+    // que hay un punto natural donde mirar los datos ya descifrados.
+    if (tomatepack::isV3(srcVault)) {
+        return tomatepack::unsealFolder(srcVault, destDir, kDistSecret,
+                                        nullptr, error, nullptr, inspector);
+    }
+
+    // Un paquete del formato antiguo se extrae entero y se revisa despues, en
+    // la carpeta. No se puede hacer mientras se instala porque ese formato
+    // reconstruye todo de una vez; lo que importa es que SE revise, y de eso
+    // se encarga quien llama.
+    return unsealWholeFolder(srcVault, destDir, error);
+}
+
 bool unsealWholeFolder(const std::wstring& srcVault,
                        const std::wstring& destDir,
                        std::string& error) {
@@ -1930,6 +1948,45 @@ bool publish(const std::wstring& path, const std::string& name,
         }
     }
 
+    // Y si sigue sin aparecer: un paquete guardado bajo un codigo ALEATORIO
+    // (el que da GENERAR CODIGO) no se deriva del nombre ni tiene reserva, asi
+    // que ninguna de las busquedas de arriba lo encuentra. Es el caso normal
+    // del primer juego, y es el mismo paquete que `hasArchive` acaba de
+    // reconocer para dejar publicar: si no se adoptara aqui, el juego se
+    // publicaria SIN archivos y nadie podria descargarlo.
+    if (pend.archive.empty()) {
+        for (const Pending& q : loadPendings(path)) {
+            if (q.archive.empty()) continue;
+
+            // Que no sea de OTRO juego ya publicado. El que se esta publicando
+            // ahora (`name`) ya esta en `all`, asi que se excluye a proposito:
+            // su paquete es justo el que se busca.
+            bool deOtro = false;
+            for (const Game& x : all) {
+                if (x.name == name) continue;
+                if (x.name == q.game || sameCode(q.game, makeGameCode(x.name))) {
+                    deOtro = true;
+                    break;
+                }
+            }
+            if (deOtro) continue;
+
+            for (const Reserva& r : reservations(path)) {
+                if (r.game != name && !r.game.empty() && sameCode(q.game, r.code)) {
+                    deOtro = true;
+                    break;
+                }
+            }
+            if (deOtro) continue;
+
+            if (GetFileAttributesW(q.archive.c_str()) == INVALID_FILE_ATTRIBUTES)
+                continue;
+
+            pend = q;
+            break;
+        }
+    }
+
     if (!pend.archive.empty() || pend.priceSet) {
         bool adoptado = true;
         std::string ignorado;
@@ -2272,7 +2329,66 @@ bool hasArchive(const std::wstring& path, const std::string& name) {
             if (sameCode(p.game, r.code)) return true;
         }
     }
-    return false;
+
+    // --- y, por ultimo, un paquete guardado SIN dueno todavia ---
+    //
+    // BUG QUE ESTO ARREGLA, y es el caso mas comun de todos:
+    //
+    // GENERAR CODIGO da un codigo ALEATORIO de 15 caracteres, y GUARDAR
+    // ARCHIVOS anota el paquete bajo ese codigo porque el juego aun no tiene
+    // nombre -- el nombre se escribe despues, en SUBIR JUEGO. Pero las dos vias
+    // de arriba solo saben relacionar un nombre con:
+    //   - el codigo DETERMINISTA que se deriva del nombre (10 caracteres), o
+    //   - una RESERVA hecha desde el catalogo.
+    // Un codigo aleatorio de 15 caracteres no es ninguno de los dos, asi que
+    // NUNCA cuadraba: el autor guardaba su juego, veia "archivos guardados", y
+    // al subirlo se le seguia pidiendo que subiera los archivos. Sin salida.
+    //
+    // Si hay un paquete guardado que no pertenece a ningun juego ya publicado,
+    // es de este: es justo el juego que se esta subiendo ahora. Para el autor
+    // el trabajo esta hecho, y es el orden natural (guardar y luego publicar).
+    //
+    // No se arriesga nada con ello: `publish` adopta ese mismo pendiente, asi
+    // que el paquete que se reconoce aqui es exactamente el que se va a
+    // publicar.
+    return !unclaimedArchive(path).archive.empty();
+}
+
+Pending unclaimedArchive(const std::wstring& path) {
+    const std::vector<Game> all = load(path);
+
+    for (const Pending& p : loadPendings(path)) {
+        if (p.archive.empty()) continue;
+
+        // ¿Pertenece a un juego ya publicado? Entonces no esta libre: es el
+        // paquete de ese juego y no el de uno nuevo.
+        bool deAlguien = false;
+        for (const Game& g : all) {
+            if (g.name == p.game || sameCode(p.game, makeGameCode(g.name))) {
+                deAlguien = true;
+                break;
+            }
+        }
+        if (deAlguien) continue;
+
+        // Tampoco esta libre si su codigo lo reservo un juego con nombre.
+        for (const Reserva& r : reservations(path)) {
+            if (sameCode(p.game, r.code) && !r.game.empty()) {
+                deAlguien = true;
+                break;
+            }
+        }
+        if (deAlguien) continue;
+
+        // El paquete debe seguir existiendo en disco: un registro que apunta a
+        // un archivo borrado no es un juego listo para publicar, y dejarlo
+        // pasar daria un juego publicado que nadie puede descargar.
+        if (GetFileAttributesW(p.archive.c_str()) == INVALID_FILE_ATTRIBUTES)
+            continue;
+
+        return p;
+    }
+    return Pending{};
 }
 
 bool addVersion(const std::wstring& path, const std::string& name,

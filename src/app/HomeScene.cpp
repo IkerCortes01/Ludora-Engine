@@ -2,6 +2,7 @@
 #include "app/DemoScene.h"
 #include "app/Font5x7.h"
 #include "app/GameInstall.h"
+#include "app/Guardian.h"
 #include "app/Session.h"
 #include "app/TextRender.h"   // alto real de linea de la fuente del sistema
 #include "core/Engine.h"
@@ -14,6 +15,7 @@
 #include <windows.h>
 #include <commdlg.h>   // GetOpenFileNameW: WIN32_LEAN_AND_MEAN lo excluye
 #include <shlobj.h>    // SHBrowseForFolderW: elegir una carpeta de juego
+#include <shellapi.h>  // SHFileOperationW: borrar una descarga rechazada
 
 namespace ludora {
 
@@ -1668,14 +1670,85 @@ void HomeScene::updateProduct(Engine& engine, f64 dt) {
                 const std::wstring destinoP =
                     std::wstring(kGamesDir) + L"\\" + carpetaP;
 
+                // --- se revisa MIENTRAS se instala ---
+                //
+                // El inspector ve cada bloque ya descifrado antes de que llegue
+                // al disco, asi que una amenaza corta la instalacion en el
+                // acto en vez de escribirse entera y revisarse despues. Los
+                // datos ya estan en memoria, de modo que esto no anade ni una
+                // lectura: el analisis sale practicamente gratis.
                 std::string perr;
-                if (!gamevault::unsealWholeFolder(vv->archive, destinoP, perr)) {
+                std::vector<guardian::Hallazgo> enVuelo;
+                const bool okExtraer = gamevault::unsealWholeFolderScanned(
+                    vv->archive, destinoP, perr,
+                    [&](const u8* d, size_t n, std::string& motivo) -> bool {
+                        if (guardian::revisarBloque(d, n, L"paquete", enVuelo))
+                            return true;
+                        motivo = "Se detuvo la descarga: el antivirus del "
+                                 "equipo encontro codigo malicioso en el "
+                                 "paquete del juego.";
+                        return false;
+                    });
+
+                if (!okExtraer) {
+                    // Lo que se hubiera escrito se borra: una instalacion
+                    // cortada a medias no debe quedarse en el disco.
+                    SHFILEOPSTRUCTW op{};
+                    std::wstring from = destinoP;
+                    from.push_back(L'\0'); from.push_back(L'\0');
+                    op.wFunc  = FO_DELETE;
+                    op.pFrom  = from.c_str();
+                    op.fFlags = FOF_NO_UI | FOF_NOCONFIRMATION | FOF_NOERRORUI;
+                    SHFileOperationW(&op);
+
                     m_prodBuyMsg     = perr.empty()
                                      ? "No se pudo abrir el paquete del juego."
                                      : perr;
                     m_prodBuyMsgErr  = true;
-                    m_prodBuyMsgTime = 3.0;
+                    m_prodBuyMsgTime = enVuelo.empty() ? 3.0 : 8.0;
                     return;
+                }
+
+                // --- revision de seguridad, ANTES de dejarlo en la biblioteca ---
+                //
+                // Se revisa aqui y no despues porque este es el momento en que
+                // los archivos ya estan en disco pero el juego todavia NO
+                // consta como instalado: si hay una amenaza, se borra la
+                // carpeta y no queda nada. Revisarlo despues de registrarlo
+                // dejaria al jugador con un juego en su biblioteca que no
+                // deberia estar ahi.
+                {
+                    const guardian::Informe inf = guardian::revisarCarpeta(destinoP);
+
+                    if (inf.bloqueado()) {
+                        // Amenaza: se borra lo descargado. Mas vale perder la
+                        // descarga que dejarla en el disco del jugador.
+                        SHFILEOPSTRUCTW op{};
+                        std::wstring from = destinoP;
+                        from.push_back(L'\0'); from.push_back(L'\0');
+                        op.wFunc  = FO_DELETE;
+                        op.pFrom  = from.c_str();
+                        op.fFlags = FOF_NO_UI | FOF_NOCONFIRMATION | FOF_NOERRORUI;
+                        SHFileOperationW(&op);
+
+                        std::string detalle = inf.resumen();
+                        for (const auto& h : inf.hallazgos) {
+                            if (h.nivel != guardian::Nivel::Peligro) continue;
+                            detalle += " ";
+                            detalle += h.motivo;
+                            break;   // uno basta: el resto esta en el informe
+                        }
+                        m_prodBuyMsg     = detalle;
+                        m_prodBuyMsgErr  = true;
+                        m_prodBuyMsgTime = 8.0;   // mas tiempo: hay que leerlo
+                        return;
+                    }
+
+                    // Sin amenazas, pero con cosas que conviene saber: se
+                    // instala y se avisa. No se decide por el jugador algo que
+                    // es suyo, pero tampoco se le oculta.
+                    m_prodScanMsg = inf.resumen();
+                    m_prodScanAviso = (inf.peor() == guardian::Nivel::Aviso);
                 }
 
                 // El paquete puede no traer ningun .exe -- un juego subido
@@ -1699,9 +1772,19 @@ void HomeScene::updateProduct(Engine& engine, f64 dt) {
                 library::add(kLibraryFile, e);
                 m_libraryLoaded = false;   // la biblioteca se relee
 
-                m_prodBuyMsg     = "Descargado: el juego ya esta en tu biblioteca.";
-                m_prodBuyMsgErr  = false;
-                m_prodBuyMsgTime = 3.0;
+                // El resultado de la revision va en el mismo aviso: el jugador
+                // tiene que ver que SE reviso, no solo que se descargo. Un
+                // analisis del que no se informa es, para quien lo usa,
+                // indistinguible de no haberlo hecho.
+                if (!m_prodScanMsg.empty()) {
+                    m_prodBuyMsg = "Descargado y revisado. " + m_prodScanMsg;
+                    m_prodBuyMsgTime = m_prodScanAviso ? 7.0 : 4.0;
+                } else {
+                    m_prodBuyMsg = "Descargado: el juego ya esta en tu biblioteca.";
+                    m_prodBuyMsgTime = 3.0;
+                }
+                m_prodBuyMsgErr = false;
+                m_prodScanMsg.clear();
                 return;
             }
 
