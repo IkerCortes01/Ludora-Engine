@@ -102,6 +102,17 @@ bool unsealWholeFolder(const std::wstring& srcVault,
 /// esta vacia -- un paquete sin archivos no es un juego.
 bool measureFolder(const std::wstring& srcDir, i32& filesOut, u64& bytesOut);
 
+/// Secreto con el que se sellan los paquetes DISTRIBUIBLES.
+///
+/// No es la huella del equipo a proposito: un juego publicado tiene que poder
+/// abrirlo quien lo descargue, y sellarlo con la huella del autor daria un
+/// paquete que solo funciona en su PC.
+///
+/// Se expone para que el autodiagnostico pueda verificar un paquete sin
+/// repetir la cadena por su cuenta: dos copias de un secreto acaban
+/// separandose, y entonces la prueba deja de comprobar lo que cree.
+const char* distributionSecret();
+
 /// Cifra SOLO los datos sensibles de la carpeta (partidas, config). Los
 /// assets se copian en claro aparte, no van aqui.
 bool sealDataOnly(const std::wstring& sourceExe,

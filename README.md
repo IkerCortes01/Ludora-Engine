@@ -129,10 +129,18 @@ Cómo está cifrado, de dentro afuera:
    una GPU o un ASIC. Está implementado en el propio motor (`Argon2.cpp`)
    sobre un **BLAKE2b** propio (`Blake2b.cpp`), ambos verificados contra los
    vectores oficiales de sus RFC.
-2. La salida de Argon2 alimenta **10 capas encadenadas de AES-256-GCM**, cada
-   una con su clave PBKDF2-HMAC-SHA512 (120 000 iteraciones), su salt y su
-   nonce propios. Cada capa lleva su tag de autenticación, así que cualquier
-   manipulación se detecta antes de descifrar la siguiente.
+2. La salida de Argon2 alimenta una capa de **AES-256-GCM** con su clave
+   PBKDF2-HMAC-SHA512 (120 000 iteraciones), su salt y su nonce propios. El tag
+   de autenticación detecta cualquier manipulación antes de usar los datos.
+
+   *Fueron 10 capas encadenadas, y se bajó a una a propósito:* las diez
+   derivaban del **mismo** secreto, así que quien rompiera una rompía todas —no
+   multiplicaban la seguridad, solo el trabajo. Lo que de verdad encarece un
+   ataque es el estirado (Argon2id + PBKDF2), que no se ha tocado. Lo que sí
+   costaban era tiempo: diez pasadas de AES sobre el archivo entero, cada una
+   con una copia completa del buffer. Al **abrir** se sigue admitiendo cualquier
+   número de capas —la cuenta va escrita en la cabecera—, así que los almacenes
+   de 10 capas ya guardados se leen igual.
 
 Qué **no** hace, dicho sin rodeos:
 
@@ -147,10 +155,77 @@ Qué **no** hace, dicho sin rodeos:
 - **El almacén guarda el tipo de dispositivo** (`Escritorio`/`Portatil`/…),
   **nunca ubicación ni IP.**
 
-Sobre las "10 capas": con AES-256 no multiplican la seguridad por diez —el
-eslabón débil sigue siendo la contraseña—, pero hacen que comprometer una
-clave no baste. Lo que de verdad encarece un ataque es Argon2id. El código
-está comentado así para que nadie asuma una fortaleza que no tiene.
+El código está comentado así —diciendo también lo que *no* aporta cada
+decisión— para que nadie asuma una fortaleza que no tiene.
+
+### Paquetes de juego (`.tomate` v3)
+
+Lo que produce **GUARDAR ARCHIVOS Y ACTUALIZAR** no es un vault del equipo: es
+un paquete **distribuible**, que tiene que abrirse en el PC de quien lo
+descargue. Por eso se sella con un secreto de distribución y no con la huella
+del autor — sellarlo con su huella daría un juego que solo él puede instalar.
+
+El cifrado aquí no esconde nada del jugador (va a ejecutar el juego de todos
+modos): sirve para que el paquete **viaje como una unidad íntegra** y no se
+pueda alterar a medias sin que se detecte.
+
+Cómo está hecho (`TomatePack.{h,cpp}`):
+
+1. El juego se trata como un **flujo continuo** de archivos concatenados, y ese
+   flujo se corta en **bloques de 8 MiB**. Los bloques no se alinean con los
+   archivos a propósito: un juego de miles de archivos pequeños daría miles de
+   bloques diminutos, que comprimen mucho peor.
+2. **Argon2id se paga UNA vez** por paquete. De esa clave maestra sale la
+   subclave de cada bloque con **BLAKE2b con clave**, que es casi gratis.
+   Estirar por bloque no añadiría seguridad —el secreto es el mismo— y costaría
+   minutos.
+3. En la derivación de cada subclave entran el **número de bloque** y un
+   **identificador aleatorio del paquete**. Así un bloque solo descifra en *su*
+   posición de *su* paquete: reordenarlos, duplicarlos o traer uno de otro
+   paquete hace fallar el tag.
+4. Cada bloque lleva su **propio tag AES-256-GCM**, así que una alteración se
+   detecta al abrir ese bloque, sin descifrar el paquete entero.
+5. El **índice va cifrado** igual que los datos: los nombres de los archivos
+   del juego no se leen abriendo el `.tomate` con un editor.
+6. Al extraer, **toda ruta se valida antes de escribir nada**. Una entrada con
+   `..\..\Windows\System32\...` se rechaza: instalar un juego no puede escribir
+   fuera de su carpeta.
+
+Por qué se cambió el formato anterior, con números medidos en este equipo:
+
+| | antes (todo en memoria) | ahora (en flujo) |
+|---|---|---|
+| guardar 400 MB | 14,9 s | **3,1 s** |
+| memoria al guardar 400 MB | 1087 MB | **218 MB** |
+| memoria al guardar 1,2 GB | *no cabía: el proceso moría* | **217 MB** |
+| tamaño del paquete | 63,5 % | **59,5 %** |
+
+El formato viejo construía el paquete entero en RAM **tres veces** (empaquetado,
+comprimido y cifrado), así que necesitaba ~2,2 veces el tamaño del juego en
+memoria libre y tenía un tope de 4 GB. De ahí venía el aviso de "no hay memoria
+suficiente", que a un autor con un juego grande no le dejaba salida. Ahora la
+memoria es **fija** —unas decenas de MB— sea el juego de 10 MB o de 100 GB, y
+no hay tope de tamaño.
+
+La compresión elige por bloque. Medido sobre 150 MB de mezcla real de juego:
+
+| codec | ratio | comprimir | descomprimir |
+|---|---|---|---|
+| LZNT1 (el que se usaba) | 57,8 % | 43,8 MB/s | 99,5 MB/s |
+| XPRESS | 50,6 % | 183,0 MB/s | 665,5 MB/s |
+| XPRESS_HUFF | 42,3 % | 89,6 MB/s | 116,1 MB/s |
+
+`XPRESS_HUFF` deja el paquete más pequeño, pero descomprime 6 veces más lento,
+y eso no es simétrico: comprimir lo hace el autor **una** vez, descomprimir lo
+hacen **todos** los jugadores en **cada** instalación. Así que se cata un trozo
+pequeño primero; si no comprime —el caso de texturas y audio, el grueso de un
+juego— el bloque se guarda crudo, que es lo más rápido posible. Si comprime
+bien, se compara y solo se paga la descompresión lenta cuando el ahorro es
+real. Los bloques se comprimen y cifran **en paralelo**, un hilo por núcleo
+menos uno (la interfaz sigue dibujándose mientras se guarda).
+
+Los paquetes del formato anterior **siguen abriéndose**: el lector mira la
+marca del archivo y usa el código viejo si hace falta.
 
 ### Sesión recordada
 
@@ -258,7 +333,8 @@ src/
    ├─ HomeScene.{h,cpp}  pantalla tras iniciar sesión (vacía por ahora)
    ├─ Account.{h,cpp}    cuenta única: validación, SHA-256 + salt
    ├─ Device.{h,cpp}     huella del equipo (hash) y tipo genérico
-   ├─ Vault.{h,cpp}      almacén cifrado: Argon2id + 10× AES-256-GCM
+   ├─ Vault.{h,cpp}      almacén cifrado: Argon2id + AES-256-GCM
+   ├─ TomatePack.{h,cpp} paquetes de juego en flujo: bloques, paralelo
    ├─ Argon2.{h,cpp}     Argon2id (RFC 9106), memoria-dura
    ├─ Blake2b.{h,cpp}    BLAKE2b (RFC 7693), base de Argon2
    ├─ Session.{h,cpp}    sesión recordada, cifrada y ligada al equipo

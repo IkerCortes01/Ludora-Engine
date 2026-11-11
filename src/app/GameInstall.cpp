@@ -1,6 +1,7 @@
 #include "app/GameInstall.h"
 #include "app/Vault.h"
 #include "app/Device.h"
+#include "app/TomatePack.h"
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
@@ -652,6 +653,11 @@ namespace {
 /// el juego de todos modos): sirve para que el paquete viaje como una unidad
 /// integra y no se pueda alterar a medias sin que el Vault lo detecte.
 const char* kDistSecret = "ludora-paquete-distribucion-v1";
+} // namespace
+
+const char* distributionSecret() { return kDistSecret; }
+
+namespace {
 
 /// Comprime y cifra un blob ya empaquetado a un archivo.
 bool sealBlobToFile(std::vector<u8>& blob, const std::wstring& destVault,
@@ -763,93 +769,26 @@ bool sealWholeFolder(const std::wstring& srcDir,
                      const std::wstring& destVault,
                      std::atomic<float>* progress,
                      std::string& error) {
-    if (srcDir.empty()) { error = "No se eligio ninguna carpeta."; return false; }
-
-    // --- se comprueba ANTES de leer nada que la carpeta cabe ---
+    // --- esto ahora lo hace el formato v3, en flujo ---
     //
-    // El guardado llega a tener en RAM el blob y su comprimido a la vez, y
-    // LZNT1 trabaja sobre buffers de 32 bits. Sin esta comprobacion, una
-    // carpeta demasiado grande se leia entera -- minutos de disco -- para
-    // reventar al final por falta de memoria, o peor, para truncar en
-    // silencio y dejar un paquete corrupto que fallaba al instalarse.
+    // Antes, aqui mismo, se leia la carpeta ENTERA a un buffer, se comprimia a
+    // un segundo buffer y se cifraba a un tercero: tres copias del juego en
+    // RAM. De ahi venian los dos limites que habia que comprobar antes de
+    // empezar -- 4 GB de tope del formato y ~2.2 veces el juego en memoria
+    // libre -- y el aviso de "no hay memoria suficiente", que al autor de un
+    // juego grande no le dejaba salida.
     //
-    // Comprobarlo aqui cuesta un recorrido de metadatos (milisegundos) y
-    // convierte un fallo tardio e incomprensible en un aviso inmediato que
-    // dice exactamente que pasa y cuanto sobra.
-    {
-        i32 nf = 0;
-        u64 nb = 0;
-        if (!measureFolder(srcDir, nf, nb)) {
-            error = "No se pudo leer esa carpeta.";
-            return false;
-        }
-        if (nf == 0) {
-            error = "Esa carpeta esta vacia: no hay nada que guardar.";
-            return false;
-        }
-
-        // Tope del formato: las longitudes del blob son de 32 bits.
-        constexpr u64 kTopeFormato = 0xFFFFFFFFULL;   // 4 GB
-        if (nb >= kTopeFormato) {
-            char b[200];
-            std::snprintf(b, sizeof(b),
-                          "La carpeta ocupa %.1f GB y el maximo son 4 GB. "
-                          "Quita lo que no haga falta y vuelve a intentarlo.",
-                          nb / (1024.0 * 1024.0 * 1024.0));
-            error = b;
-            return false;
-        }
-
-        // Tope de memoria: hacen falta ~2.2 veces el tamano de la carpeta
-        // (blob + comprimido + holgura). Si no hay, se dice ahora.
-        MEMORYSTATUSEX ms{};
-        ms.dwLength = sizeof(ms);
-        if (GlobalMemoryStatusEx(&ms)) {
-            const u64 necesita = nb * 22 / 10;
-            if (necesita > ms.ullAvailPhys) {
-                char b[260];
-                std::snprintf(b, sizeof(b),
-                              "Para guardar %.1f GB hacen falta unos %.1f GB "
-                              "de memoria libre y hay %.1f GB. Cierra algun "
-                              "programa y vuelve a intentarlo.",
-                              nb / (1024.0 * 1024.0 * 1024.0),
-                              necesita / (1024.0 * 1024.0 * 1024.0),
-                              ms.ullAvailPhys / (1024.0 * 1024.0 * 1024.0));
-                error = b;
-                return false;
-            }
-        }
-
-        // Tope de disco: el paquete ocupa como mucho lo que la carpeta.
-        ULARGE_INTEGER libre{};
-        const std::wstring destDir = parentDir(destVault);
-        if (!destDir.empty() &&
-            GetDiskFreeSpaceExW(destDir.c_str(), &libre, nullptr, nullptr)) {
-            if (libre.QuadPart < nb) {
-                char b[240];
-                std::snprintf(b, sizeof(b),
-                              "No hay sitio en el disco: el paquete puede "
-                              "ocupar hasta %.1f GB y quedan %.1f GB libres.",
-                              nb / (1024.0 * 1024.0 * 1024.0),
-                              libre.QuadPart / (1024.0 * 1024.0 * 1024.0));
-                error = b;
-                return false;
-            }
-        }
-    }
-
-    if (progress) progress->store(0.05f);
-
-    // El empaquetado ocupa del 5% al 50%: es la fase larga en un juego
-    // grande, y la barra avanza archivo a archivo en vez de quedarse quieta.
-    std::vector<u8> blob;
-    if (!packFolder(srcDir, blob, progress, 0.05f, 0.50f)) {
-        error = "No se pudo leer la carpeta del juego.";
-        return false;
-    }
-    // Secreto de distribucion, no la huella del equipo: el paquete tiene que
-    // abrirse en el PC de quien lo descargue.
-    return sealBlobToFile(blob, destVault, progress, error, kDistSecret);
+    // tomatepack trabaja por bloques: lee un trozo, lo comprime, lo cifra y lo
+    // escribe, y repite. La memoria que usa es fija (unas decenas de MB) sea
+    // el juego de 10 MB o de 100 GB, los bloques se comprimen en paralelo en
+    // todos los nucleos, y ya no hay tope de tamano. Por eso las
+    // comprobaciones previas de memoria y de 4 GB desaparecieron: dejaron de
+    // describir una limitacion real.
+    //
+    // El secreto sigue siendo el de DISTRIBUCION y no la huella del equipo: el
+    // paquete tiene que abrirse en el PC de quien lo descargue.
+    return tomatepack::sealFolder(srcDir, destVault, kDistSecret, progress,
+                                  error, nullptr);
 }
 
 bool measureFolder(const std::wstring& srcDir, i32& filesOut, u64& bytesOut) {
@@ -969,6 +908,18 @@ bool restoreData(const std::wstring& srcVault, const std::wstring& destDir,
 bool unsealWholeFolder(const std::wstring& srcVault,
                        const std::wstring& destDir,
                        std::string& error) {
+    // --- los paquetes nuevos (v3) se abren en flujo ---
+    //
+    // Se mira la marca del archivo en vez de suponer el formato, porque los
+    // dos conviven: un autor puede tener paquetes guardados con el formato
+    // anterior y seguirian teniendo que instalarse. Por eso el lector viejo
+    // se queda tal cual mas abajo en vez de borrarse.
+    if (tomatepack::isV3(srcVault)) {
+        return tomatepack::unsealFolder(srcVault, destDir, kDistSecret,
+                                        nullptr, error, nullptr);
+    }
+
+    // --- formato anterior: el paquete entero en memoria ---
     std::vector<u8> sealed;
     if (!Vault::loadFile(srcVault, sealed) || sealed.empty()) {
         error = "No se encontro el paquete de archivos del juego.";

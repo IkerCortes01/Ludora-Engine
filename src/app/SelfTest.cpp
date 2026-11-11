@@ -10,6 +10,7 @@
 #include "app/Argon2.h"
 #include "app/Session.h"
 #include "app/GameInstall.h"
+#include "app/TomatePack.h"
 #include "app/VirtualFileSystem.h"
 #include "app/Font5x7.h"
 #include "app/TextRender.h"
@@ -6877,6 +6878,129 @@ void SelfTest::update(Engine& engine, f64 dt) {
                 DeleteFileW(L"paq.t93.tomate");
                 DeleteFileW(L"src.t93\\a.bin");
                 RemoveDirectoryW(L"src.t93");
+            }
+
+            // --- el paquete nuevo: subcarpetas, integridad y rutas ---
+            //
+            // El formato en flujo (tomatepack) se hizo para que guardar no
+            // necesite el juego entero en memoria. Lo que se comprueba aqui es
+            // que a cambio no se perdio nada de lo que importa: que el
+            // contenido vuelve IDENTICO, que una alteracion se detecta, y que
+            // un paquete no puede escribir fuera de su carpeta.
+            {
+                const wchar_t* kDir = L"tp.t94";
+                const wchar_t* kPak = L"tp.t94.tomate";
+                const wchar_t* kOut = L"tp.t94.out";
+
+                auto borrarArbol = [](const wchar_t* d) {
+                    std::wstring from(d);
+                    from.push_back(L'\0'); from.push_back(L'\0');
+                    SHFILEOPSTRUCTW op{};
+                    op.wFunc = FO_DELETE; op.pFrom = from.c_str();
+                    op.fFlags = FOF_NO_UI | FOF_NOCONFIRMATION | FOF_NOERRORUI;
+                    SHFileOperationW(&op);
+                };
+                borrarArbol(kDir); borrarArbol(kOut); DeleteFileW(kPak);
+
+                // Un arbol con varios niveles: es justo lo que un bug de
+                // recursion rompe sin que se note en una carpeta plana.
+                CreateDirectoryW(kDir, nullptr);
+                CreateDirectoryW(L"tp.t94\\datos", nullptr);
+                CreateDirectoryW(L"tp.t94\\datos\\nivel1", nullptr);
+                CreateDirectoryW(L"tp.t94\\assets", nullptr);
+                std::ofstream(L"tp.t94\\juego.exe", std::ios::binary) << "MZ-raiz";
+                std::ofstream(L"tp.t94\\datos\\conf.json", std::ios::binary)
+                    << "{\"a\":1}";
+                std::ofstream(L"tp.t94\\datos\\nivel1\\mapa.dat", std::ios::binary)
+                    << "mapa-del-nivel-uno";
+                std::ofstream(L"tp.t94\\assets\\tex.png", std::ios::binary)
+                    << "pixeles";
+                std::ofstream(L"tp.t94\\vacio.txt", std::ios::binary) << "";
+
+                std::string errT;
+                std::atomic<float> progT{0.0f};
+                const bool okSeal = gamevault::sealWholeFolder(kDir, kPak,
+                                                               &progT, errT);
+                check("El paquete nuevo se sella", okSeal, errT.c_str());
+                check("Y lo escribe en el formato en flujo (v3)",
+                      tomatepack::isV3(kPak), "");
+
+                errT.clear();
+                const bool okUn = gamevault::unsealWholeFolder(kPak, kOut, errT);
+                check("Y se vuelve a abrir", okUn, errT.c_str());
+
+                // El contenido de CADA nivel del arbol, comparado de verdad.
+                auto leer = [](const wchar_t* p) {
+                    std::ifstream in(p, std::ios::binary);
+                    return std::string((std::istreambuf_iterator<char>(in)),
+                                       std::istreambuf_iterator<char>());
+                };
+                check("Vuelve el archivo de la raiz",
+                      leer(L"tp.t94.out\\juego.exe") == "MZ-raiz", "");
+                check("Vuelve el de una subcarpeta",
+                      leer(L"tp.t94.out\\datos\\conf.json") == "{\"a\":1}", "");
+                check("Y el de una subcarpeta de segundo nivel",
+                      leer(L"tp.t94.out\\datos\\nivel1\\mapa.dat") ==
+                          "mapa-del-nivel-uno", "");
+                check("Y el de otra rama del arbol",
+                      leer(L"tp.t94.out\\assets\\tex.png") == "pixeles", "");
+                check("Un archivo vacio se recrea vacio, no se pierde",
+                      GetFileAttributesW(L"tp.t94.out\\vacio.txt") !=
+                          INVALID_FILE_ATTRIBUTES, "");
+
+                // Integridad: un byte cambiado en la zona de datos tiene que
+                // detectarse, no instalarse a medias.
+                {
+                    std::vector<u8> raw;
+                    Vault::loadFile(kPak, raw);
+                    check("El paquete tiene contenido que verificar",
+                          raw.size() > 600, std::to_string(raw.size()).c_str());
+
+                    std::string errV;
+                    check("Verificar un paquete intacto dice que esta bien",
+                          tomatepack::verify(kPak, gamevault::distributionSecret(),
+                                             nullptr, errV), errV.c_str());
+
+                    if (raw.size() > 600) {
+                        std::vector<u8> roto = raw;
+                        roto[roto.size() - 50] ^= 0x5A;
+                        Vault::saveFile(L"tp.t94.roto.tomate", roto);
+
+                        errV.clear();
+                        check("Un byte alterado se detecta al verificar",
+                              !tomatepack::verify(L"tp.t94.roto.tomate",
+                                                  gamevault::distributionSecret(),
+                                                  nullptr, errV),
+                              errV.c_str());
+
+                        borrarArbol(L"tp.t94.roto.out");
+                        errV.clear();
+                        check("Y un paquete alterado NO se instala",
+                              !gamevault::unsealWholeFolder(
+                                  L"tp.t94.roto.tomate", L"tp.t94.roto.out",
+                                  errV), errV.c_str());
+                        borrarArbol(L"tp.t94.roto.out");
+                        DeleteFileW(L"tp.t94.roto.tomate");
+                    }
+                }
+
+                // Dos sellados del mismo contenido dan bytes distintos: cada
+                // paquete lleva su propio salt y su propio identificador.
+                {
+                    std::string errR;
+                    std::vector<u8> a, b;
+                    Vault::loadFile(kPak, a);
+                    gamevault::sealWholeFolder(kDir, L"tp.t94.b.tomate",
+                                               &progT, errR);
+                    Vault::loadFile(L"tp.t94.b.tomate", b);
+                    check("Dos sellados iguales no dan los mismos bytes",
+                          !a.empty() && !b.empty() && a != b, "");
+                    DeleteFileW(L"tp.t94.b.tomate");
+                }
+
+                borrarArbol(kDir);
+                borrarArbol(kOut);
+                DeleteFileW(kPak);
             }
 
             // --- guardar PUBLICA la version, sin un segundo boton ---

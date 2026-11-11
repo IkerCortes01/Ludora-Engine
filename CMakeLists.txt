@@ -43,6 +43,7 @@ add_executable(Ludora WIN32
     src/app/Argon2.cpp
     src/app/Session.cpp
     src/app/GameInstall.cpp
+    src/app/TomatePack.cpp
     src/app/VirtualFileSystem.cpp
     src/app/HomeScene.cpp
     src/ui/TextField.cpp
