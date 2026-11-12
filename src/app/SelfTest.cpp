@@ -6999,6 +6999,117 @@ void SelfTest::update(Engine& engine, f64 dt) {
                     DeleteFileW(L"tp.t94.b.tomate");
                 }
 
+                // --- datos de compresibilidad VARIADA ---
+                //
+                // ESTA PRUEBA EXISTE POR UN BUG QUE LAS DE ARRIBA NO VIERON, y
+                // que rompia todos los paquetes publicados: la validacion del
+                // indice comparaba el codec con "el ultimo del enum"
+                // (XpressHuff, que vale 2) en vez de con la lista real, asi que
+                // cualquier bloque comprimido con Xpress (3) se rechazaba AL
+                // LEER. El paquete se guardaba perfecto y despues era ilegible:
+                // "el indice del paquete esta danado" sobre un archivo intacto,
+                // y ningun juego de la tienda se podia descargar.
+                //
+                // Las pruebas de arriba usan textos muy repetitivos, que
+                // comprimen por debajo de la mitad y por eso elegian
+                // XpressHuff -- justo el valor que si pasaba la validacion. Un
+                // juego real tiene mezcla de datos y elige Xpress. Aqui se
+                // generan a proposito contenidos a medio camino, para que el
+                // escritor tenga que usar los distintos codecs y la lectura
+                // tenga que aceptarlos todos.
+                {
+                    const wchar_t* kMixDir = L"tp.t94.mix";
+                    const wchar_t* kMixPak = L"tp.t94.mix.tomate";
+                    const wchar_t* kMixOut = L"tp.t94.mix.out";
+                    borrarArbol(kMixDir); borrarArbol(kMixOut);
+                    DeleteFileW(kMixPak);
+                    CreateDirectoryW(kMixDir, nullptr);
+
+                    // Seis archivos, de totalmente comprimible a puro ruido.
+                    // Pasan de 8 MiB para que haya mas de un bloque.
+                    u32 semilla = 20261112u;
+                    auto siguiente = [&semilla]() -> u32 {
+                        // Generador propio: reproducible y sin depender de la
+                        // biblioteca, que aqui da igual lo bueno que sea.
+                        semilla ^= semilla << 13;
+                        semilla ^= semilla >> 17;
+                        semilla ^= semilla << 5;
+                        return semilla;
+                    };
+
+                    std::vector<std::string> contenidos;
+                    for (i32 k = 0; k < 6; ++k) {
+                        const size_t total = 9u * 1024 * 1024;
+                        const u32 umbral = static_cast<u32>(k) * 200;  // 0..1000
+                        std::string s;
+                        s.reserve(total);
+                        static const char* kPal[] = {
+                            "objeto", "valor", "nivel", "malla", "textura", "indice"
+                        };
+                        while (s.size() < total) {
+                            if ((siguiente() % 1000u) < umbral) {
+                                for (i32 j = 0; j < 64 && s.size() < total; ++j)
+                                    s.push_back(static_cast<char>(siguiente() & 0xFF));
+                            } else {
+                                const char* w = kPal[siguiente() % 6u];
+                                for (const char* c = w; *c && s.size() < total; ++c)
+                                    s.push_back(*c);
+                                if (s.size() < total) s.push_back(' ');
+                            }
+                        }
+                        wchar_t nom[128];
+                        std::swprintf(nom, 128, L"%ls\\mezcla%02d.dat", kMixDir, k);
+                        std::ofstream f(nom, std::ios::binary);
+                        f.write(s.data(), static_cast<std::streamsize>(s.size()));
+                        contenidos.push_back(std::move(s));
+                    }
+
+                    std::string errM;
+                    std::atomic<float> progM{0.0f};
+                    check("Una mezcla realista de datos se sella",
+                          gamevault::sealWholeFolder(kMixDir, kMixPak, &progM, errM),
+                          errM.c_str());
+
+                    // Lo que fallaba: leer el indice de lo recien escrito.
+                    tomatepack::Info infoM;
+                    errM.clear();
+                    const bool okIdx = tomatepack::info(
+                        kMixPak, gamevault::distributionSecret(), infoM, errM);
+                    std::snprintf(buf, sizeof(buf), "%llu archivos, %llu bloques",
+                                  static_cast<unsigned long long>(infoM.files),
+                                  static_cast<unsigned long long>(infoM.blocks));
+                    check("Y su indice SE PUEDE LEER despues", okIdx,
+                          okIdx ? buf : errM.c_str());
+
+                    errM.clear();
+                    check("El paquete se verifica entero",
+                          tomatepack::verify(kMixPak,
+                                             gamevault::distributionSecret(),
+                                             nullptr, errM), errM.c_str());
+
+                    errM.clear();
+                    check("Y se puede DESCARGAR (abrir) sin errores",
+                          gamevault::unsealWholeFolder(kMixPak, kMixOut, errM),
+                          errM.c_str());
+
+                    bool igualM = true;
+                    for (size_t k = 0; k < contenidos.size(); ++k) {
+                        wchar_t nom[128];
+                        std::swprintf(nom, 128, L"%ls\\mezcla%02zu.dat",
+                                      kMixOut, k);
+                        std::ifstream in(nom, std::ios::binary);
+                        const std::string leido(
+                            (std::istreambuf_iterator<char>(in)),
+                            std::istreambuf_iterator<char>());
+                        if (leido != contenidos[k]) igualM = false;
+                    }
+                    check("Y todo el contenido vuelve identico", igualM, "");
+
+                    borrarArbol(kMixDir);
+                    borrarArbol(kMixOut);
+                    DeleteFileW(kMixPak);
+                }
+
                 borrarArbol(kDir);
                 borrarArbol(kOut);
                 DeleteFileW(kPak);
@@ -7179,6 +7290,45 @@ void SelfTest::update(Engine& engine, f64 dt) {
                               reinterpret_cast<const u8*>(datos.data()),
                               datos.size(), L"bloque", hs) && hs.empty(), "");
                 }
+
+                // --- los .js de documentacion NO son un aviso ---
+                //
+                // POR QUE: el primer juego real que se reviso dio CIEN avisos,
+                // y noventa y nueve eran los .js de la documentacion de GLFW,
+                // una biblioteca que usa el motor. Un aviso que sale siempre
+                // es un aviso que nadie lee, y el que de verdad importa queda
+                // enterrado. Lo que vive en docs/ o external/ no lo ejecuta el
+                // juego: viene con el codigo de sus dependencias.
+                DeleteFileW(L"guard.t96\\instalar.bat");
+                CreateDirectoryW(L"guard.t96\\external", nullptr);
+                CreateDirectoryW(L"guard.t96\\external\\glfw", nullptr);
+                CreateDirectoryW(L"guard.t96\\external\\glfw\\docs", nullptr);
+                {
+                    for (i32 k = 0; k < 8; ++k) {
+                        wchar_t nom[160];
+                        std::swprintf(nom, 160,
+                                      L"guard.t96\\external\\glfw\\docs\\all_%d.js", k);
+                        std::ofstream(nom, std::ios::binary) << "var x=1;\n";
+                    }
+                }
+                const guardian::Informe docs = guardian::revisarCarpeta(kG);
+                std::snprintf(buf, sizeof(buf), "%zu hallazgos; %s",
+                              docs.hallazgos.size(), docs.resumen().c_str());
+                check("Los .js de documentacion no llenan el informe de avisos",
+                      docs.hallazgos.empty(), buf);
+                check("Y no bloquean la descarga", !docs.bloqueado(), "");
+
+                // Pero un script EN LA RAIZ, donde el juego si lo lanzaria,
+                // sigue avisando: el filtro no relaja lo que importa.
+                { std::ofstream(L"guard.t96\\arranca.bat", std::ios::binary)
+                      << "@echo off\n"; }
+                const guardian::Informe raiz = guardian::revisarCarpeta(kG);
+                bool avisaRaiz = false;
+                for (const auto& h : raiz.hallazgos)
+                    if (h.archivo.find(L"arranca.bat") != std::wstring::npos)
+                        avisaRaiz = true;
+                check("Pero un script en la raiz del juego SI avisa",
+                      avisaRaiz, raiz.resumen().c_str());
 
                 borrarG(kG);
             }

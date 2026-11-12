@@ -507,7 +507,25 @@ bool readIndex(const std::vector<u8>& in, std::vector<Entry>& files,
         b.storedLen  = getU64(&in[p]); p += 8;
         b.plainLen   = getU64(&in[p]); p += 8;
         const u32 c  = getU32(&in[p]); p += 4;
-        if (c > static_cast<u32>(Codec::XpressHuff)) return false;
+
+        // Se valida contra la lista REAL de codecs, uno por uno.
+        //
+        // BUG QUE ESTO ARREGLA, y rompia todos los paquetes nuevos: aqui habia
+        // un `c > (u32)Codec::XpressHuff`, que vale 2. Cuando se anadio
+        // `Xpress` se le dio el valor 3, asi que cualquier bloque comprimido
+        // con XPRESS -- el que el escritor elige casi siempre -- se rechazaba
+        // al leer el indice. El paquete se guardaba perfectamente y luego era
+        // ILEGIBLE: "el indice del paquete esta danado" en un archivo intacto.
+        //
+        // Comparar con "el ultimo del enum" es justo lo que se rompe al anadir
+        // uno nuevo, asi que ahora se enumeran: si manana aparece otro codec y
+        // alguien olvida ponerlo aqui, falla al escribirlo y se ve en el
+        // momento, en vez de producir paquetes que no se pueden abrir.
+        if (c != static_cast<u32>(Codec::None)       &&
+            c != static_cast<u32>(Codec::Lznt1)      &&
+            c != static_cast<u32>(Codec::XpressHuff) &&
+            c != static_cast<u32>(Codec::Xpress))
+            return false;
         b.codec = static_cast<Codec>(c);
         // Un bloque no puede decir que al descomprimir mide mas que el tope:
         // sin esto, un indice alterado haria reservar memoria sin limite.

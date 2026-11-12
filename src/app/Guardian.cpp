@@ -1,6 +1,8 @@
 #include "app/Guardian.h"
 #include <algorithm>
 #include <cstring>
+#include <cwchar>    // std::wcslen
+#include <cwctype>   // towlower
 #include <mutex>
 #include <windows.h>
 
@@ -114,8 +116,15 @@ Amsi& motor() {
 
 // ------------------------------------------------------- utilidades de ruta ---
 
+/// Pasa a minusculas con las reglas de Windows, NO con towlower().
+///
+/// towlower() depende de la configuracion regional del proceso y, con la de
+/// por defecto, deja intactas las mayusculas acentuadas: "DOCUMENTACIÓN" se
+/// quedaba con su "Ó" y entonces la carpeta "documentación\" no se reconocia.
+/// CharLowerBuffW usa la tabla del sistema y si las baja.
 std::wstring aMinusculas(std::wstring s) {
-    for (wchar_t& c : s) c = static_cast<wchar_t>(towlower(c));
+    if (!s.empty())
+        CharLowerBuffW(&s[0], static_cast<DWORD>(s.size()));
     return s;
 }
 
@@ -141,14 +150,74 @@ std::string aUtf8(const std::wstring& w) {
 /// normal; el resto de esta lista no tiene ninguna razon de estar dentro de un
 /// paquete de juego.
 bool esScriptOEjecutable(const std::wstring& ext, bool& esperable) {
-    esperable = (ext == L".exe" || ext == L".dll");
+    // Lo que SI es normal en un juego. Un motor trae sus bibliotecas, y los
+    // .js y .css de una documentacion en HTML no ejecutan nada en Windows:
+    // los abre un navegador, no el sistema.
+    esperable = (ext == L".exe" || ext == L".dll" || ext == L".so" ||
+                 ext == L".pdb" || ext == L".js"  || ext == L".css");
+
     static const wchar_t* kEjec[] = {
         L".exe", L".dll", L".com", L".scr", L".pif", L".cpl", L".msi",
-        L".bat", L".cmd", L".ps1", L".psm1", L".vbs", L".vbe", L".js",
+        L".bat", L".cmd", L".ps1", L".psm1", L".vbs", L".vbe",
         L".jse", L".wsf", L".wsh", L".hta", L".reg", L".lnk", L".jar",
         L".msc", L".sys", L".drv", L".ocx", L".url",
     };
     for (const wchar_t* e : kEjec) if (ext == e) return true;
+    return false;
+}
+
+/// true si la ruta esta dentro de una carpeta de documentacion o de
+/// dependencias de terceros.
+///
+/// POR QUE IMPORTA: el primer juego real que se reviso dio CIEN avisos, y
+/// noventa y nueve eran los .js de la documentacion de GLFW (una biblioteca
+/// que usa el motor). Un aviso que sale siempre es un aviso que nadie lee, y
+/// entonces el que importa de verdad pasa desapercibido entre el ruido.
+///
+/// Lo que hay en `docs/` o en `external/` no lo ejecuta el juego: viene con el
+/// codigo fuente de sus dependencias. Sigue revisandose contra el antivirus --
+/// eso no se relaja -- pero no se le molesta al usuario por cada archivo.
+bool enCarpetaDeTerceros(const std::wstring& rel) {
+    const std::wstring r = aMinusculas(rel);
+
+    // Los nombres se comparan por su PREFIJO en ASCII, sin acentos.
+    //
+    // No es por pereza: el codigo fuente esta en UTF-8, pero el compilador
+    // traduce los literales L"..." usando la pagina de codigos del sistema,
+    // asi que un L"documentación" escrito aqui NO produce los mismos
+    // caracteres que tiene la carpeta en el disco y la comparacion no cuadraba
+    // nunca. Comparando "documentaci" se acierta igual con "documentacion" y
+    // con "documentación", y deja de depender de como se compilo el archivo.
+    static const wchar_t* kPrefijos[] = {
+        L"docs",     L"doc",        L"documentaci",  // documentacion/-ción
+        L"external", L"externals",  L"third_party",  L"thirdparty",
+        L"vendor",   L"deps",       L"node_modules", L"examples",
+        L"samples",  L"tests",      L"test",
+    };
+
+    // Se mira cada componente de la ruta por separado: asi "docs\x.js" y
+    // "motor\external\y.js" entran, pero un archivo llamado "documentos.js"
+    // en la raiz no se confunde con la carpeta "doc".
+    size_t ini = 0;
+    while (ini < r.size()) {
+        size_t fin = r.find_first_of(L"\\/", ini);
+        const bool ultimo = (fin == std::wstring::npos);
+        if (ultimo) break;                  // el ultimo trozo es el archivo
+        const std::wstring comp = r.substr(ini, fin - ini);
+
+        for (const wchar_t* p : kPrefijos) {
+            const size_t n = std::wcslen(p);
+            if (comp.size() < n || comp.compare(0, n, p) != 0) continue;
+
+            // Coincide el prefijo. Para no tragarse nombres que solo EMPIEZAN
+            // parecido ("docsomething" no es "docs"), se exige que el nombre
+            // acabe ahi o que lo que sigue sea corto: "documentaci" + "on" o
+            // + "ón" vale, pero "external" + "izador" no.
+            const size_t sobra = comp.size() - n;
+            if (sobra == 0 || sobra <= 3) return true;
+        }
+        ini = fin + 1;
+    }
     return false;
 }
 
@@ -403,15 +472,29 @@ Informe revisarCarpeta(const std::wstring& dir,
         }
 
         // --- 2) scripts y ejecutables donde no toca ---
+        //
+        // Se avisa SOLO de los que estan donde el juego los ejecutaria. Lo que
+        // vive en docs/ o external/ viene con el codigo de las dependencias y
+        // no lo lanza nadie: avisar de cada uno enterraria el aviso importante
+        // bajo cien irrelevantes. Se siguen revisando contra el antivirus.
         bool esperable = false;
         const bool ejecutable = esScriptOEjecutable(ext, esperable);
-        if (ejecutable && !esperable) {
-            Hallazgo hh;
-            hh.nivel   = Nivel::Aviso;
-            hh.motivo  = "Un juego no necesita este tipo de archivo (" +
-                         aUtf8(ext) + "): puede ejecutar ordenes en tu equipo.";
-            hh.archivo = rel;
-            inf.hallazgos.push_back(std::move(hh));
+        const bool deTerceros = enCarpetaDeTerceros(rel);
+
+        if (ejecutable && !esperable && !deTerceros) {
+            // Se cuentan TODOS, pero solo se detallan los primeros: una lista
+            // de doscientas lineas no la lee nadie, y el total sigue siendo
+            // exacto porque se informa aparte mas abajo.
+            constexpr i32 kMaxDetalle = 12;
+            if (ejecutablesInesperados < kMaxDetalle) {
+                Hallazgo hh;
+                hh.nivel   = Nivel::Aviso;
+                hh.motivo  = "Un juego no necesita este tipo de archivo (" +
+                             aUtf8(ext) + "): puede ejecutar ordenes en tu "
+                             "equipo.";
+                hh.archivo = rel;
+                inf.hallazgos.push_back(std::move(hh));
+            }
             ++ejecutablesInesperados;
         }
 
@@ -467,8 +550,9 @@ Informe revisarCarpeta(const std::wstring& dir,
         Hallazgo hh;
         hh.nivel  = Nivel::Aviso;
         hh.motivo = "El paquete trae " + std::to_string(ejecutablesInesperados) +
-                    " archivos que ejecutan ordenes. Un juego normal no "
-                    "necesita ninguno.";
+                    " archivos que pueden ejecutar ordenes, fuera de las "
+                    "carpetas de documentacion y dependencias. Un juego "
+                    "normal no necesita ninguno.";
         inf.hallazgos.push_back(std::move(hh));
     }
 
