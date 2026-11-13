@@ -708,6 +708,64 @@ void HomeScene::update(Engine& engine, f64 dt) {
         return;
     }
 
+    // --- descarga de la tienda terminada ---
+    //
+    // Se recoge aqui, fuera de la seccion Tienda, para que se complete aunque
+    // el usuario se vaya a otra pestana mientras baja el juego. El hilo ya hizo
+    // todo el trabajo pesado; lo que queda es registrar y avisar.
+    if (m_download.done() && m_downloadStarted) {
+        m_downloadStarted = false;
+        const std::string nombre = m_download.name();
+        const std::wstring carpeta = m_download.destDir();
+
+        if (m_download.failed()) {
+            m_prodBuyMsg    = m_download.error().empty()
+                            ? std::string("No se pudo descargar el juego.")
+                            : m_download.error();
+            m_prodBuyMsgErr = true;
+            // Una amenaza hay que leerla; un fallo corriente no.
+            m_prodBuyMsgTime = m_download.blocked() ? 8.0 : 4.0;
+            m_download.join();
+            return;
+        }
+
+        m_download.join();
+
+        // El paquete puede no traer ningun .exe -- un juego subido sin
+        // compilar, por ejemplo. Antes se registraba igual, con el ejecutable
+        // vacio: el juego aparecia instalado en la biblioteca y no arrancaba
+        // nunca, sin explicar por que.
+        const std::wstring exeJuego = findFirstExe(carpeta);
+        if (exeJuego.empty()) {
+            m_prodBuyMsg     = "Los archivos se descargaron, pero el paquete "
+                               "no trae ningun ejecutable.";
+            m_prodBuyMsgErr  = true;
+            m_prodBuyMsgTime = 4.0;
+            return;
+        }
+
+        // Queda en la biblioteca con sus archivos en claro: el paquete ya
+        // cumplio su funcion de transporte.
+        library::Entry e;
+        e.name = nombre;
+        e.exe  = exeJuego;
+        library::add(kLibraryFile, e);
+        m_libraryLoaded = false;   // la biblioteca se relee
+
+        // El resultado de la revision va en el mismo aviso: el jugador tiene
+        // que ver que SE reviso, no solo que se descargo. Un analisis del que
+        // no se informa es, para quien lo usa, indistinguible de no haberlo
+        // hecho.
+        if (!m_download.scanMsg().empty()) {
+            m_prodBuyMsg     = "Descargado y revisado. " + m_download.scanMsg();
+            m_prodBuyMsgTime = m_download.scanAviso() ? 7.0 : 4.0;
+        } else {
+            m_prodBuyMsg     = "Descargado: el juego ya esta en tu biblioteca.";
+            m_prodBuyMsgTime = 3.0;
+        }
+        m_prodBuyMsgErr = false;
+    }
+
     // Al terminar de instalar, registrar el juego en la biblioteca. Se hace
     // aqui, fuera de la seccion Tienda, para que se complete aunque el usuario
     // navegue a otra pestana mientras se instala.
@@ -1670,121 +1728,30 @@ void HomeScene::updateProduct(Engine& engine, f64 dt) {
                 const std::wstring destinoP =
                     std::wstring(kGamesDir) + L"\\" + carpetaP;
 
-                // --- se revisa MIENTRAS se instala ---
+                // --- la descarga corre en SU PROPIO HILO ---
                 //
-                // El inspector ve cada bloque ya descifrado antes de que llegue
-                // al disco, asi que una amenaza corta la instalacion en el
-                // acto en vez de escribirse entera y revisarse despues. Los
-                // datos ya estan en memoria, de modo que esto no anade ni una
-                // lectura: el analisis sale practicamente gratis.
-                std::string perr;
-                std::vector<guardian::Hallazgo> enVuelo;
-                const bool okExtraer = gamevault::unsealWholeFolderScanned(
-                    vv->archive, destinoP, perr,
-                    [&](const u8* d, size_t n, std::string& motivo) -> bool {
-                        if (guardian::revisarBloque(d, n, L"paquete", enVuelo))
-                            return true;
-                        motivo = "Se detuvo la descarga: el antivirus del "
-                                 "equipo encontro codigo malicioso en el "
-                                 "paquete del juego.";
-                        return false;
-                    });
-
-                if (!okExtraer) {
-                    // Lo que se hubiera escrito se borra: una instalacion
-                    // cortada a medias no debe quedarse en el disco.
-                    SHFILEOPSTRUCTW op{};
-                    std::wstring from = destinoP;
-                    from.push_back(L'\0'); from.push_back(L'\0');
-                    op.wFunc  = FO_DELETE;
-                    op.pFrom  = from.c_str();
-                    op.fFlags = FOF_NO_UI | FOF_NOCONFIRMATION | FOF_NOERRORUI;
-                    SHFileOperationW(&op);
-
-                    m_prodBuyMsg     = perr.empty()
-                                     ? "No se pudo abrir el paquete del juego."
-                                     : perr;
-                    m_prodBuyMsgErr  = true;
-                    m_prodBuyMsgTime = enVuelo.empty() ? 3.0 : 8.0;
+                // Extraer y revisar un juego de 1 GB lleva unos 40 segundos
+                // (medido: 19 extrayendo y 24 revisando). Hacerlo aqui mismo
+                // bloqueaba este update(), y con el la ventana entera: Windows
+                // deja de recibir mensajes, pinta el marco en blanco y la marca
+                // como "no responde" a los pocos segundos. Para quien descarga,
+                // eso no se distingue de un cuelgue -- era el "se congela todo".
+                //
+                // Ahora el trabajo se va a un hilo y este update() vuelve en el
+                // acto. El progreso se recoge en update(), igual que el de
+                // GameInstall.
+                if (m_download.running()) {
+                    m_prodBuyMsg     = "Ya hay una descarga en curso...";
+                    m_prodBuyMsgErr  = false;
+                    m_prodBuyMsgTime = 2.0;
                     return;
                 }
 
-                // --- revision de seguridad, ANTES de dejarlo en la biblioteca ---
-                //
-                // Se revisa aqui y no despues porque este es el momento en que
-                // los archivos ya estan en disco pero el juego todavia NO
-                // consta como instalado: si hay una amenaza, se borra la
-                // carpeta y no queda nada. Revisarlo despues de registrarlo
-                // dejaria al jugador con un juego en su biblioteca que no
-                // deberia estar ahi.
-                {
-                    const guardian::Informe inf = guardian::revisarCarpeta(destinoP);
-
-                    if (inf.bloqueado()) {
-                        // Amenaza: se borra lo descargado. Mas vale perder la
-                        // descarga que dejarla en el disco del jugador.
-                        SHFILEOPSTRUCTW op{};
-                        std::wstring from = destinoP;
-                        from.push_back(L'\0'); from.push_back(L'\0');
-                        op.wFunc  = FO_DELETE;
-                        op.pFrom  = from.c_str();
-                        op.fFlags = FOF_NO_UI | FOF_NOCONFIRMATION | FOF_NOERRORUI;
-                        SHFileOperationW(&op);
-
-                        std::string detalle = inf.resumen();
-                        for (const auto& h : inf.hallazgos) {
-                            if (h.nivel != guardian::Nivel::Peligro) continue;
-                            detalle += " ";
-                            detalle += h.motivo;
-                            break;   // uno basta: el resto esta en el informe
-                        }
-                        m_prodBuyMsg     = detalle;
-                        m_prodBuyMsgErr  = true;
-                        m_prodBuyMsgTime = 8.0;   // mas tiempo: hay que leerlo
-                        return;
-                    }
-
-                    // Sin amenazas, pero con cosas que conviene saber: se
-                    // instala y se avisa. No se decide por el jugador algo que
-                    // es suyo, pero tampoco se le oculta.
-                    m_prodScanMsg = inf.resumen();
-                    m_prodScanAviso = (inf.peor() == guardian::Nivel::Aviso);
-                }
-
-                // El paquete puede no traer ningun .exe -- un juego subido
-                // sin compilar, por ejemplo. Antes se registraba igual, con
-                // el ejecutable vacio: el juego aparecia instalado en la
-                // biblioteca y no arrancaba nunca, sin explicar por que.
-                const std::wstring exeJuego = findFirstExe(destinoP);
-                if (exeJuego.empty()) {
-                    m_prodBuyMsg     = "Los archivos se descargaron, pero el "
-                                       "paquete no trae ningun ejecutable.";
-                    m_prodBuyMsgErr  = true;
-                    m_prodBuyMsgTime = 4.0;
-                    return;
-                }
-
-                // Queda en la biblioteca con sus archivos en claro: el paquete
-                // ya cumplio su funcion de transporte.
-                library::Entry e;
-                e.name = g.name;
-                e.exe  = exeJuego;
-                library::add(kLibraryFile, e);
-                m_libraryLoaded = false;   // la biblioteca se relee
-
-                // El resultado de la revision va en el mismo aviso: el jugador
-                // tiene que ver que SE reviso, no solo que se descargo. Un
-                // analisis del que no se informa es, para quien lo usa,
-                // indistinguible de no haberlo hecho.
-                if (!m_prodScanMsg.empty()) {
-                    m_prodBuyMsg = "Descargado y revisado. " + m_prodScanMsg;
-                    m_prodBuyMsgTime = m_prodScanAviso ? 7.0 : 4.0;
-                } else {
-                    m_prodBuyMsg = "Descargado: el juego ya esta en tu biblioteca.";
-                    m_prodBuyMsgTime = 3.0;
-                }
-                m_prodBuyMsgErr = false;
-                m_prodScanMsg.clear();
+                m_download.start(vv->archive, destinoP, g.name);
+                m_downloadStarted = true;
+                m_prodBuyMsg      = "Descargando...";
+                m_prodBuyMsgErr   = false;
+                m_prodBuyMsgTime  = 2.0;
                 return;
             }
 
@@ -2035,8 +2002,13 @@ void HomeScene::drawProduct(Engine& engine, Framebuffer& fb) {
             // un nombre fijo.
             const bool instalando = m_install.running() &&
                                     m_installingName == g.name;
-            const bool tengo = !instalando && library::has(kLibraryFile, g.name);
-            const bool hov   = m_prodBuyHover && !tengo && !instalando;
+            // Descargando ESTE juego. Se compara el nombre para que abrir la
+            // ficha de otro no muestre la barra de una descarga ajena.
+            const bool bajando = m_download.running() &&
+                                 m_download.name() == g.name;
+            const bool ocupado = instalando || bajando;
+            const bool tengo = !ocupado && library::has(kLibraryFile, g.name);
+            const bool hov   = m_prodBuyHover && !tengo && !ocupado;
 
             auto ajusta = [&](Color c, f32 k) {
                 return Color{ static_cast<u8>(std::clamp(c.r * k, 0.0f, 255.0f)),
@@ -2045,37 +2017,64 @@ void HomeScene::drawProduct(Engine& engine, Framebuffer& fb) {
             };
             // Verde cuando se puede descargar; apagado cuando ya se tiene,
             // para que se vea antes de pulsarlo.
-            const Color base = tengo      ? kFieldBg
-                             : instalando ? kDevGold : kConsentGreen;
+            const Color base = tengo   ? kFieldBg
+                             : ocupado ? kDevGold : kConsentGreen;
             fb.fillRect(b, m_prodBuyDown ? ajusta(base, 0.7f)
                         : hov            ? ajusta(base, 1.25f) : base);
             fb.drawRect(b, tengo ? kPanelEdge
-                        : instalando ? kDevGold
+                        : ocupado ? kDevGold
                         : (hov ? kWhite : kConsentGreen), 2);
 
-            // Mientras instala, el relleno avanza con el progreso: el propio
+            // Mientras trabaja, el relleno avanza con el progreso: el propio
             // boton hace de barra, sin ocupar mas sitio en la ficha.
-            if (instalando) {
-                const i32 lleno = static_cast<i32>(b.w * m_install.progress());
+            if (ocupado) {
+                const f32 p = bajando ? m_download.progress()
+                                      : m_install.progress();
+                const i32 lleno = static_cast<i32>(b.w * p);
                 fb.fillRect({ b.x, b.y, std::max(0, lleno), b.h },
                             ajusta(kDevGold, 1.4f));
             }
 
+            // Con el porcentaje a la vista se sabe que avanza. Sin el, una
+            // barra lenta y una barra parada se parecen demasiado.
+            std::string pct;
+            if (bajando) {
+                char tmp[32];
+                std::snprintf(tmp, sizeof(tmp), "%d%%",
+                              static_cast<i32>(m_download.progress() * 100.0f + 0.5f));
+                pct = tmp;
+            }
+
             const char* txt = tengo      ? "EN TU BIBLIOTECA"
+                            : bajando    ? pct.c_str()
                             : instalando ? "INSTALANDO..." : "DESCARGAR";
             i32 e = 2;
             while (e > 1 && font5x7::measureUtf8(txt, e) > b.w - 10) --e;
             const i32 tw = font5x7::measureUtf8(txt, e);
             font5x7::drawTextUtf8(fb, b.x + (b.w - tw) / 2,
                                   b.y + (b.h - textr::glyphHeight(e)) / 2,
-                                  txt, tengo ? kDim : (instalando ? kBg : kWhite), e);
+                                  txt, tengo ? kDim : (ocupado ? kBg : kWhite), e);
         }
     }
 
     // --- aviso de la descarga, bajo el boton ---
     // Fuera del bloque de la imagen para que se lea aunque la portada no se
     // haya podido dibujar.
-    if (m_prodBuyMsgTime > 0.0 && !m_prodBuyMsg.empty()) {
+    //
+    // Mientras se descarga manda la etapa en curso: es informacion viva, y
+    // tapa el aviso efimero de "Descargando..." que ya no aporta nada.
+    const std::string etapaViva =
+        m_download.running() ? m_download.etapa() : std::string();
+
+    if (!etapaViva.empty()) {
+        const i32 mw = font5x7::measureUtf8(etapaViva.c_str(), 1);
+        const i32 mx = m_prodBuyRect.x + m_prodBuyRect.w - mw;
+        const i32 my = m_prodBuyRect.y + m_prodBuyRect.h + 6;
+        if (mx > m_prodArtRect.x && my + font5x7::kGlyphH < fb.height()) {
+            fb.fillRect({ mx - 6, my - 4, mw + 12, textr::glyphHeight(1) + 8 }, kBg);
+            font5x7::drawTextUtf8(fb, mx, my, etapaViva.c_str(), kDevGold, 1);
+        }
+    } else if (m_prodBuyMsgTime > 0.0 && !m_prodBuyMsg.empty()) {
         const i32 mw = font5x7::measureUtf8(m_prodBuyMsg.c_str(), 1);
         const i32 mx = m_prodBuyRect.x + m_prodBuyRect.w - mw;
         const i32 my = m_prodBuyRect.y + m_prodBuyRect.h + 6;

@@ -796,6 +796,12 @@ private:
     bool        m_installDown  = false;
     GameInstall m_install;
     bool        m_installStarted = false;
+
+    /// Descarga de la tienda, en su propio hilo. Separada de m_install porque
+    /// son dos caminos distintos: aquel copia una carpeta del disco del autor,
+    /// este abre un paquete publicado.
+    GameDownload m_download;
+    bool         m_downloadStarted = false;
     /// Juego que se esta instalando y su precio, para registrarlo en la
     /// biblioteca cuando termine. Sin esto habria que adivinar cual era.
     std::string m_installingName;

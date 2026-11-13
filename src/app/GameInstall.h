@@ -3,6 +3,7 @@
 #include "app/TomatePack.h"
 #include <atomic>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -213,6 +214,91 @@ private:
     std::wstring       m_vaultPath;
     i32                m_files = 0;
     u64                m_bytes = 0;
+};
+
+/// DESCARGA un juego de la tienda: extrae su paquete sobre una carpeta propia
+/// y lo analiza, todo en un hilo aparte.
+///
+/// Existe por la misma razon que GameArchive: el trabajo es largo. Un juego de
+/// 1 GB tarda unos 40 segundos entre extraer y revisar, y hacerlo dentro del
+/// update() de la escena dejaba la ventana sin responder todo ese rato --
+/// Windows la marca como "no responde" a los pocos segundos, asi que la
+/// descarga parecia un cuelgue y no una espera.
+///
+/// El progreso se reparte entre las dos etapas (ver kPesoExtraer) para que la
+/// barra avance de forma continua en vez de llegar al 100% y quedarse ahi
+/// mientras todavia queda la revision.
+class GameDownload {
+public:
+    ~GameDownload();
+
+    /// Arranca la descarga de `archive` sobre `destDir`. No bloquea.
+    bool start(const std::wstring& archive, const std::wstring& destDir,
+               const std::string& name);
+
+    bool  running()  const { return m_running.load(); }
+    bool  done()     const { return m_done.load(); }
+    bool  failed()   const { return m_failed.load(); }
+    f32   progress() const { return m_progress.load(); }   // 0..1
+
+    /// Que esta haciendo ahora mismo, para decirselo al usuario. Se protege
+    /// con un mutex porque es una cadena y la escribe el hilo de trabajo.
+    std::string etapa() const;
+
+    const std::string& error() const { return m_error; }
+    /// Juego al que pertenece esta descarga.
+    const std::string& name() const  { return m_name; }
+    /// Carpeta donde quedaron los archivos.
+    std::wstring destDir() const     { return m_destDir; }
+
+    /// Resumen del analisis, para mostrarlo al terminar.
+    const std::string& scanMsg() const { return m_scanMsg; }
+    bool scanAviso() const             { return m_scanAviso; }
+    /// true si el analisis encontro una amenaza y la carpeta se borro.
+    bool blocked() const               { return m_blocked.load(); }
+
+    /// Pide cortar la descarga. El hilo lo consulta a menudo y deja de
+    /// escribir; lo ya escrito se borra, como en cualquier otro fallo.
+    void cancel() { m_cancel.store(true); }
+    bool cancelled() const { return m_cancel.load(); }
+
+    void join();
+
+private:
+    void worker(std::wstring archive, std::wstring destDir);
+    void workerBody(std::wstring archive, std::wstring destDir);
+    /// Borra lo que se hubiera escrito: una descarga cortada a medias no debe
+    /// quedarse en el disco.
+    void limpiar(const std::wstring& destDir);
+    void setEtapa(const std::string& s);
+    /// Marca el final (con o sin fallo) en el orden correcto: primero el
+    /// motivo, luego las banderas que la interfaz consulta.
+    void terminar(bool fallo, const std::string& motivo);
+
+    /// Parte del progreso que corresponde a extraer; el resto es el analisis.
+    /// Medido sobre un juego real de 1 GB: extraer ~19 s, analizar ~24 s.
+    static constexpr float kPesoExtraer = 0.45f;
+
+    std::thread        m_thread;
+    std::atomic<bool>  m_running{false};
+    std::atomic<bool>  m_done{false};
+    std::atomic<bool>  m_failed{false};
+    std::atomic<bool>  m_blocked{false};
+    std::atomic<bool>  m_cancel{false};
+    std::atomic<float> m_progress{0.0f};
+
+    /// Progreso de la etapa en curso (0..1). Lo rellenan unsealFolder y
+    /// revisarCarpeta; el hilo lo traduce al progreso global.
+    std::atomic<float> m_etapaProgress{0.0f};
+
+    mutable std::mutex m_etapaMx;
+    std::string        m_etapa;
+
+    std::string  m_error;
+    std::string  m_name;
+    std::wstring m_destDir;
+    std::string  m_scanMsg;
+    bool         m_scanAviso = false;
 };
 
 /// Registro de juegos instalados (biblioteca). Persistente en disco.

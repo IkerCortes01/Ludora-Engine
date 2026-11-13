@@ -2,7 +2,9 @@
 #include "app/Vault.h"
 #include "app/Device.h"
 #include "app/TomatePack.h"
+#include "app/Guardian.h"
 #include <algorithm>
+#include <thread>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -1103,6 +1105,230 @@ void GameArchive::workerBody(std::wstring srcDir, std::wstring destVault) {
     }
     m_done.store(true);
     m_running.store(false);
+}
+
+// --------------------------------------------------------------- descarga ---
+
+namespace {
+
+/// Traduce el progreso de UNA etapa (0..1) al progreso global, mientras la
+/// etapa corre.
+///
+/// Hace falta un hilo porque unsealFolder y revisarCarpeta publican su avance
+/// en un `atomic<float>` propio que va de 0 a 1: sin esto, la barra llegaria al
+/// final al acabar de extraer y volveria a empezar al revisar. Cambiar la firma
+/// de las dos funciones para que supieran de tramos seria peor -- no es asunto
+/// suyo saber que hay otra etapa despues.
+class PuenteProgreso {
+public:
+    PuenteProgreso(const std::atomic<float>& etapa, std::atomic<float>& global,
+                   float desde, float hasta)
+        : m_etapa(etapa), m_global(global), m_desde(desde), m_hasta(hasta),
+          m_hilo([this]() {
+              while (!m_fin.load()) {
+                  m_global.store(m_desde +
+                                 m_etapa.load() * (m_hasta - m_desde));
+                  Sleep(60);
+              }
+          }) {}
+
+    ~PuenteProgreso() {
+        m_fin.store(true);
+        if (m_hilo.joinable()) m_hilo.join();
+        m_global.store(m_hasta);
+    }
+
+    PuenteProgreso(const PuenteProgreso&)            = delete;
+    PuenteProgreso& operator=(const PuenteProgreso&) = delete;
+
+private:
+    const std::atomic<float>& m_etapa;
+    std::atomic<float>&       m_global;
+    float                     m_desde, m_hasta;
+    std::atomic<bool>         m_fin{false};
+    std::thread               m_hilo;
+};
+
+} // namespace
+
+GameDownload::~GameDownload() { cancel(); join(); }
+
+void GameDownload::join() {
+    if (m_thread.joinable()) m_thread.join();
+}
+
+std::string GameDownload::etapa() const {
+    std::lock_guard<std::mutex> lk(m_etapaMx);
+    return m_etapa;
+}
+
+void GameDownload::setEtapa(const std::string& s) {
+    std::lock_guard<std::mutex> lk(m_etapaMx);
+    m_etapa = s;
+}
+
+void GameDownload::limpiar(const std::wstring& destDir) {
+    // SHFileOperationW pide la lista terminada en DOS nulos.
+    SHFILEOPSTRUCTW op{};
+    std::wstring from = destDir;
+    from.push_back(L'\0');
+    from.push_back(L'\0');
+    op.wFunc  = FO_DELETE;
+    op.pFrom  = from.c_str();
+    op.fFlags = FOF_NO_UI | FOF_NOCONFIRMATION | FOF_NOERRORUI;
+    SHFileOperationW(&op);
+}
+
+void GameDownload::terminar(bool fallo, const std::string& motivo) {
+    m_error = motivo;
+    m_failed.store(fallo);
+    // `done` se pone el ULTIMO: la interfaz la consulta para saber que ya puede
+    // leer el resto, asi que todo lo demas tiene que estar escrito antes.
+    m_done.store(true);
+    m_running.store(false);
+}
+
+bool GameDownload::start(const std::wstring& archive, const std::wstring& destDir,
+                         const std::string& name) {
+    if (m_running.load()) return false;
+
+    // Un hilo que termino pero nadie recogio sigue siendo joinable, y asignar
+    // sobre el llama a std::terminate(). Pasa al descargar dos veces seguidas.
+    if (m_thread.joinable()) m_thread.join();
+
+    m_running.store(true);
+    m_done.store(false);
+    m_failed.store(false);
+    m_blocked.store(false);
+    m_cancel.store(false);
+    m_progress.store(0.0f);
+    m_etapaProgress.store(0.0f);
+    m_error.clear();
+    m_scanMsg.clear();
+    m_scanAviso = false;
+    m_name    = name;
+    m_destDir = destDir;
+    setEtapa("Preparando la descarga...");
+
+    m_thread = std::thread(&GameDownload::worker, this, archive, destDir);
+    return true;
+}
+
+void GameDownload::worker(std::wstring archive, std::wstring destDir) {
+    // Cualquier excepcion se convierte en un fallo de descarga. Sin esto, un
+    // bad_alloc al abrir un paquete enorme mataria el proceso entero en vez de
+    // dejar a la interfaz explicar lo que paso.
+    try {
+        workerBody(std::move(archive), std::move(destDir));
+    } catch (const std::bad_alloc&) {
+        limpiar(m_destDir);
+        terminar(true, "El juego no cupo en la memoria del equipo. Vuelve a "
+                       "guardar el paquete para que use el formato nuevo, que "
+                       "no necesita cargarlo entero.");
+    } catch (const std::exception& e) {
+        limpiar(m_destDir);
+        terminar(true, std::string("Error al descargar: ") + e.what());
+    } catch (...) {
+        limpiar(m_destDir);
+        terminar(true, "Error desconocido al descargar.");
+    }
+}
+
+void GameDownload::workerBody(std::wstring archive, std::wstring destDir) {
+    // --- etapa 1: extraer, revisando cada bloque al vuelo ---
+    //
+    // El inspector ve cada bloque ya descifrado ANTES de que llegue al disco,
+    // asi que una amenaza corta la descarga en el acto en vez de escribirse
+    // entera y revisarse despues. Los datos ya estan en memoria: el analisis
+    // no cuesta ni una lectura mas.
+    setEtapa("Descargando los archivos...");
+
+    std::vector<guardian::Hallazgo> enVuelo;
+    std::string err;
+
+    m_etapaProgress.store(0.0f);
+
+    bool okExtraer = false;
+    {
+        PuenteProgreso puente(m_etapaProgress, m_progress, 0.0f, kPesoExtraer);
+        okExtraer = tomatepack::isV3(archive)
+            ? tomatepack::unsealFolder(
+                  archive, destDir, gamevault::distributionSecret(),
+                  &m_etapaProgress, err, &m_cancel,
+                  [&](const u8* d, size_t n, std::string& motivo) -> bool {
+                      if (guardian::revisarBloque(d, n, L"paquete", enVuelo))
+                          return true;
+                      motivo = "Se detuvo la descarga: el antivirus del equipo "
+                               "encontro codigo malicioso en el paquete del "
+                               "juego.";
+                      return false;
+                  })
+            // Un paquete del formato antiguo se reconstruye de una vez: no hay
+            // bloques que inspeccionar ni progreso que publicar. Se extrae aqui
+            // y lo revisa la etapa 2, que es la que de verdad importa.
+            : gamevault::unsealWholeFolder(archive, destDir, err);
+    }
+
+    if (!okExtraer) {
+        limpiar(destDir);
+
+        if (m_cancel.load()) {
+            terminar(true, "Descarga cancelada.");
+            return;
+        }
+        if (!enVuelo.empty()) m_blocked.store(true);
+        terminar(true, err.empty() ? "No se pudo abrir el paquete del juego."
+                                   : err);
+        return;
+    }
+
+    // --- etapa 2: analisis por ARCHIVO ---
+    //
+    // No sobra pese a la revision por bloques: esta mira cosas que un bloque no
+    // puede ver, porque un bloque no sabe donde empieza ni acaba cada archivo.
+    // Aqui se detecta un ejecutable disfrazado de textura (la extension dice
+    // una cosa y los primeros bytes otra) y se cuentan los scripts sueltos del
+    // conjunto. Eso solo se ve con los archivos ya formados.
+    setEtapa("Revisando el juego...");
+    m_etapaProgress.store(0.0f);
+
+    guardian::Informe inf;
+    {
+        PuenteProgreso puente(m_etapaProgress, m_progress, kPesoExtraer, 1.0f);
+        inf = guardian::revisarCarpeta(destDir, &m_etapaProgress, &m_cancel);
+    }
+
+    if (m_cancel.load()) {
+        limpiar(destDir);
+        terminar(true, "Descarga cancelada.");
+        return;
+    }
+
+    if (inf.bloqueado()) {
+        // Amenaza: se borra lo descargado. Mas vale perder la descarga que
+        // dejarla en el disco del jugador.
+        limpiar(destDir);
+
+        std::string detalle = inf.resumen();
+        for (const auto& h : inf.hallazgos) {
+            if (h.nivel != guardian::Nivel::Peligro) continue;
+            detalle += " ";
+            detalle += h.motivo;
+            break;   // uno basta: el resto esta en el informe
+        }
+        m_blocked.store(true);
+        terminar(true, detalle);
+        return;
+    }
+
+    // Sin amenazas, pero con cosas que conviene saber: se instala y se avisa.
+    // No se decide por el jugador algo que es suyo, pero tampoco se le oculta.
+    m_scanMsg   = inf.resumen();
+    m_scanAviso = (inf.peor() == guardian::Nivel::Aviso);
+
+    m_progress.store(1.0f);
+    setEtapa("Listo.");
+    terminar(false, std::string());
 }
 
 // ------------------------------------------------------------- biblioteca ---
