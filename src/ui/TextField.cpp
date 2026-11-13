@@ -4,6 +4,7 @@
 #include "core/Types.h"
 #include "render/Framebuffer.h"
 #include <algorithm>
+#include <vector>
 #include <windows.h>
 
 namespace ludora {
@@ -39,6 +40,117 @@ bool esSeparadorChar(char c) {
 i32 altoTexto(i32 scale) {
     return textr::available() ? textr::glyphHeight(scale)
                               : font5x7::kGlyphH * scale;
+}
+
+/// Donde cae cada caracter al repartir el texto en filas.
+struct Hueco {
+    i32    x    = 0;   // pixel donde empieza el caracter
+    i32    fila = 0;   // fila en la que acaba
+    i32    ancho = 0;  // lo que mide dibujado
+    size_t byte = 0;   // offset en la cadena, por si hace falta
+};
+
+/// Reparte `txt` en filas ajustando AL ANCHO Y POR PALABRAS.
+///
+/// Esta funcion es la unica que decide donde se corta una linea. Dibujar y
+/// situar el cursor con un clic tienen que repartir el texto EXACTAMENTE
+/// igual: con dos copias de la regla, la de abajo acababa discrepando de la de
+/// arriba y el cursor caia en una letra distinta de la que se veia.
+///
+/// EL AJUSTE ES POR PALABRA, no por caracter. Antes se cortaba en seco al
+/// llegar al borde, asi que una palabra escrita al final de la linea se partia
+/// por la mitad ("extraordina" / "rio"). Ahora, si la palabra que se esta
+/// escribiendo no cabe entera, baja ella entera a la linea siguiente.
+///
+/// Una palabra mas larga que la caja no cabe en ninguna fila: esa SI se parte
+/// por caracter, porque la alternativa es dejarla fuera de la vista o una fila
+/// vacia tras otra.
+///
+/// `huecos` recibe una entrada por caracter mas una final, que es donde va el
+/// cursor al estar al final del texto. Devuelve el numero de filas usadas.
+i32 repartirEnFilas(const std::string& txt, i32 scale, i32 x0, i32 ancho,
+                    std::vector<Hueco>& huecos) {
+    huecos.clear();
+
+    i32 fila = 0;
+    i32 x    = x0;
+
+    // Inicio de la palabra que se esta midiendo: su primer caracter y su
+    // posicion en el vector, para poder bajarla entera si no cabe.
+    size_t palIni   = 0;      // indice en `huecos` del primer caracter
+    i32    palX     = x0;     // x donde empezo la palabra
+    bool   enPalabra = false;
+
+    const char* p = txt.c_str();
+    for (;;) {
+        const char* charStart = p;
+        const size_t off = static_cast<size_t>(charStart - txt.c_str());
+
+        const u32 cp = font5x7::nextUtf8(p);
+        if (cp == 0) {
+            // Hueco final: donde se pinta el cursor al final del texto.
+            huecos.push_back(Hueco{ x, fila, 0, off });
+            break;
+        }
+
+        if (cp == '\n') {
+            huecos.push_back(Hueco{ x, fila, 0, off });
+            ++fila;
+            x = x0;
+            enPalabra = false;
+            continue;
+        }
+
+        char s[5] = {};
+        const size_t len = static_cast<size_t>(p - charStart);
+        for (size_t k = 0; k < len && k < 4; ++k) s[k] = charStart[k];
+        const i32 w = font5x7::measureUtf8(s, scale);
+
+        // Un espacio cierra la palabra en curso: lo que venga detras empieza
+        // una nueva, y es ahi donde se puede cortar la linea sin partir nada.
+        const bool separa = (cp == ' ' || cp == '\t');
+        if (separa) {
+            enPalabra = false;
+        } else if (!enPalabra) {
+            enPalabra = true;
+            palIni    = huecos.size();
+            palX      = x;
+        }
+
+        if (x + w > x0 + ancho && x > x0) {
+            // No cabe. Si estamos a mitad de una palabra, baja LA PALABRA
+            // ENTERA: se reubican los caracteres ya colocados de esta palabra
+            // al principio de la fila siguiente.
+            //
+            // Solo si esa palabra cabe en una fila vacia. Si ni siquiera eso
+            // (una palabra mas larga que la caja), bajarla no arreglaria nada
+            // y dejaria filas vacias encadenadas: se parte por caracter.
+            const i32 anchoPalabra = (x - palX) + w;
+            const bool cabeSola    = anchoPalabra <= ancho;
+
+            if (enPalabra && palIni < huecos.size() && cabeSola) {
+                ++fila;
+                i32 nx = x0;
+                for (size_t k = palIni; k < huecos.size(); ++k) {
+                    huecos[k].x    = nx;
+                    huecos[k].fila = fila;
+                    nx += huecos[k].ancho;
+                }
+                x = nx;
+            } else {
+                // O es una palabra mas larga que la caja (hay que partirla),
+                // o el corte cae justo entre palabras: salto normal.
+                ++fila;
+                x = x0;
+                if (enPalabra) { palIni = huecos.size(); palX = x; }
+            }
+        }
+
+        huecos.push_back(Hueco{ x, fila, w, off });
+        x += w;
+    }
+
+    return fila + 1;
 }
 } // namespace
 
@@ -151,47 +263,37 @@ size_t TextField::indexFromPoint(i32 x, i32 y) const {
     // Fila pedida por el clic, acotada a cero por arriba.
     const i32 filaObj = std::max(0, (y - ty) / lineaH);
 
-    // Se recorre el texto con la MISMA pluma que al dibujar -- en pixeles, no
-    // en columnas, porque la fuente es proporcional. El cursor va al primer
-    // hueco de la fila pedida que ya pase de la x pedida; si la fila se acaba
-    // antes, al final de esa fila.
+    // Se reparte con la MISMA funcion que dibuja, asi que el cursor cae
+    // siempre en el caracter que se ve, tambien cuando una palabra bajo entera
+    // de linea por el ajuste.
     const std::string vis = visibleText();
-    i32 fila = 0, px = clipL, idx = 0;
-    size_t finDeFila = 0;        // ultimo hueco visto dentro de la fila buscada
-    bool  enFila = false;        // se llego a la fila buscada
+    std::vector<Hueco> huecos;
+    repartirEnFilas(vis, scale, clipL, anchoU, huecos);
+    if (huecos.empty()) return 0;
 
-    for (const char* p = vis.c_str(); ; ++idx) {
-        const bool esLaFila = (fila == filaObj);
-        if (esLaFila) {
-            enFila = true;
-            if (px >= x) return std::min(static_cast<size_t>(idx), charCount());
-            finDeFila = static_cast<size_t>(idx);
-        } else if (fila > filaObj) {
-            // Se paso de fila sin alcanzar la x: el cursor va al final de la
-            // fila buscada.
-            return std::min(finDeFila, charCount());
-        }
+    const size_t total = charCount();
 
-        if (!*p) break;
-        const char* charStart = p;
-        const u32 cp = font5x7::nextUtf8(p);
-        if (cp == 0) break;
+    // Dentro de la fila pedida: el primer hueco cuyo centro ya pasa de la x.
+    // Comparar contra el CENTRO y no contra el inicio es lo que hace que
+    // pinchar en la mitad derecha de una letra ponga el cursor detras de ella,
+    // como en cualquier editor.
+    size_t ultimoDeFila = 0;
+    bool   hayFila = false;
 
-        if (cp == '\n') { ++fila; px = clipL; continue; }
-
-        char s[5] = {};
-        const size_t len = static_cast<size_t>(p - charStart);
-        for (size_t k = 0; k < len && k < 4; ++k) s[k] = charStart[k];
-        const i32 ancho = font5x7::measureUtf8(s, scale);
-
-        if (px + ancho > clipL + anchoU && px > clipL) { ++fila; px = clipL; }
-        px += ancho;
+    for (size_t i = 0; i < huecos.size(); ++i) {
+        if (huecos[i].fila != filaObj) continue;
+        hayFila = true;
+        const i32 centro = huecos[i].x + huecos[i].ancho / 2;
+        if (x < centro) return std::min(i, total);
+        ultimoDeFila = i;
     }
 
-    // Se acabo el texto: si la fila buscada existia, al final de ella; si el
-    // clic cayo por debajo de todo, al final del texto.
-    if (enFila) return std::min(static_cast<size_t>(idx), charCount());
-    return charCount();
+    // La fila existe pero el clic cayo a su derecha: el cursor va al final de
+    // esa fila, o sea en el hueco siguiente al ultimo caracter que contiene.
+    if (hayFila) return std::min(ultimoDeFila + 1, total);
+
+    // El clic cayo por debajo de todo el texto: al final.
+    return total;
 }
 
 void TextField::deleteSelection() {
@@ -530,56 +632,43 @@ void TextField::render(Framebuffer& fb) const {
         const i32 anchoU = std::max(1, clipR - clipL);
         const i32 lineaH = textH + 3;
 
-        i32 fila = 0;
-        i32 x    = clipL;           // pluma: avanza por el ancho REAL del glifo
-        i32 idx  = 0;               // indice de caracter, para situar el cursor
-        i32 caretPx = clipL, caretPy = ty;   // donde acabara el cursor
+        // El reparto en filas lo hace repartirEnFilas(), la MISMA funcion que
+        // usa el clic para saber donde cae el cursor. Teniendo la regla en un
+        // solo sitio no pueden discrepar.
+        std::vector<Hueco> huecos;
+        repartirEnFilas(vis, scale, clipL, anchoU, huecos);
 
-        for (const char* p = vis.c_str(); ; ++idx) {
-            // El cursor se situa ANTES de dibujar el caracter: asi queda en su
-            // hueco aunque este al final del texto.
-            if (idx == static_cast<i32>(m_caret)) {
-                caretPx = x;
-                caretPy = ty + fila * lineaH;
-            }
-            if (!*p) break;
+        const i32 limiteY = m_rect.y + m_rect.h - kPadY;
 
+        // Los caracteres: cada uno en el hueco que le toco.
+        const char* p = vis.c_str();
+        for (size_t i = 0; i + 1 < huecos.size(); ++i) {
             const char* charStart = p;
             const u32 cp = font5x7::nextUtf8(p);
             if (cp == 0) break;
-
-            if (cp == '\n') { ++fila; x = clipL; continue; }
+            if (cp == '\n') continue;           // no se dibuja, solo separa
 
             char s[5] = {};
             const size_t len = static_cast<size_t>(p - charStart);
             for (size_t k = 0; k < len && k < 4; ++k) s[k] = charStart[k];
 
-            // El ancho depende de la letra: la fuente del sistema es
-            // proporcional. Avanzar con un paso fijo dejaba huecos irregulares
-            // -- una 'w' se salia de su casilla y una 'i' la dejaba medio
-            // vacia.
-            const i32 ancho = font5x7::measureUtf8(s, scale);
+            const i32 cy = ty + huecos[i].fila * lineaH;
+            // Fuera del alto util no se dibuja; el reparto ya esta hecho, asi
+            // que el cursor sigue cayendo en su sitio.
+            if (cy + textH > limiteY) continue;
 
-            // Ajuste al ancho: al no caber el caracter se baja de fila. Corta
-            // por caracter y no por palabra; para un texto largo escrito a
-            // mano es preferible a dejar huecos grandes al final de la linea.
-            if (x + ancho > clipL + anchoU && x > clipL) { ++fila; x = clipL; }
-
-            const i32 cx = x;
-            const i32 cy = ty + fila * lineaH;
-            x += ancho;
-
-            // Fuera del alto util: se deja de dibujar, pero se sigue contando
-            // para que el cursor acabe en su sitio.
-            if (cy + textH > m_rect.y + m_rect.h - kPadY) continue;
-
-            font5x7::drawTextUtf8(fb, cx, cy, s, m_style.text, scale);
+            font5x7::drawTextUtf8(fb, huecos[i].x, cy, s, m_style.text, scale);
         }
 
-        if (foc && m_blink < kBlinkPeriod / 2.0 &&
-            caretPy + textH <= m_rect.y + m_rect.h - kPadY)
-            fb.fillRect({caretPx, caretPy - 1, std::max(1, scale), textH + 2},
-                        m_style.caret);
+        // El cursor, en el hueco de su indice.
+        if (foc && m_blink < kBlinkPeriod / 2.0 && !huecos.empty()) {
+            const size_t k = std::min(m_caret, huecos.size() - 1);
+            const i32 cpx = huecos[k].x;
+            const i32 cpy = ty + huecos[k].fila * lineaH;
+            if (cpy + textH <= limiteY)
+                fb.fillRect({cpx, cpy - 1, std::max(1, scale), textH + 2},
+                            m_style.caret);
+        }
         return;
     }
 

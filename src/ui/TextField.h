@@ -50,6 +50,11 @@ public:
     /// Avanza el parpadeo del cursor.
     void update(f64 dt);
 
+    /// Indice de caracter que corresponde a un punto, con el mismo reparto en
+    /// filas que usa el dibujo. Lo necesitan las pruebas para comprobar que el
+    /// cursor cae donde se ve el texto, sobre todo tras un ajuste de palabra.
+    size_t indexAtPointForTest(i32 x, i32 y) const { return indexFromPoint(x, y); }
+
     void render(Framebuffer& fb) const;
 
     /// Colores (se fijan una vez desde la escena).

@@ -243,7 +243,16 @@ LRESULT Window::wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         // Caracter ya traducido por la distribucion de teclado (lo produce
         // TranslateMessage en el bucle de mensajes). Los codigos de control
         // los gestiona WM_KEYDOWN, aqui solo interesa texto imprimible.
-        if (wp >= 32 && wp != 127)
+        //
+        // El RETORNO DE CARRO (13) es la excepcion: en una caja de varias
+        // lineas, Enter no es una orden sino texto -- el salto de parrafo.
+        //
+        // BUG QUE ESTO ARREGLA: este filtro exigia `wp >= 32`, asi que Enter
+        // se descartaba AQUI y nunca llegaba a los campos. El resto del camino
+        // ya estaba hecho (la escena traduce '\r' a '\n' y TextField sabe
+        // guardarlo en modo multilinea), pero no servia de nada: pulsar Enter
+        // al escribir una descripcion o un EULA no hacia absolutamente nada.
+        if ((wp >= 32 && wp != 127) || wp == '\r')
             m_input.onChar(static_cast<wchar_t>(wp));
         return 0;
 

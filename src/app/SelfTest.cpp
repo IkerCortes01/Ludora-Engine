@@ -4691,6 +4691,124 @@ void SelfTest::update(Engine& engine, f64 dt) {
             check("En una linea el Enter no se cuela en el texto",
                   unaLinea.text() == "AB", unaLinea.text().c_str());
 
+            // --- el ajuste parte por PALABRAS, no por letras ---
+            //
+            // BUG QUE ESTO PROTEGE: el reparto cortaba al llegar al borde sin
+            // mirar donde estaba, asi que una palabra escrita al final de la
+            // linea se partia por la mitad ("extraordina" / "rio").
+            //
+            // Las palabras son cortas y todas iguales A PROPOSITO: asi alguna
+            // cae siempre a caballo del borde. Con un parrafo normal los
+            // cortes suelen caer en un espacio por casualidad, y la prueba
+            // pasaria aunque el ajuste no funcionase -- comprobado.
+            {
+                TextField w;
+                w.setStyle(ml);
+                const Recti rw{ 10, 10, 200, 160 };
+                w.setRect(rw);
+                w.setMaxLength(10000);
+                w.setFocused(false);   // sin cursor parpadeando
+
+                const std::string txt =
+                    "aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj kkkk "
+                    "llll mmmm nnnn oooo pppp qqqq rrrr ssss tttt uuuu";
+                w.setText(txt);
+
+                // En que fila acaba cada caracter, preguntandole al campo en
+                // que indice cae cada punto: es el MISMO reparto que dibuja.
+                std::vector<i32> filaDe(txt.size() + 1, -1);
+                i32    filaAct  = -1;
+                size_t ultimoIni = static_cast<size_t>(-1);
+                for (i32 y = rw.y + 2; y < rw.y + rw.h - 2; ++y) {
+                    const size_t ini = w.indexAtPointForTest(rw.x + 1, y);
+                    const size_t fin = w.indexAtPointForTest(rw.x + rw.w - 1, y);
+                    if (ini == ultimoIni) continue;
+                    ultimoIni = ini;
+                    ++filaAct;
+                    for (size_t i = ini; i < fin && i < txt.size(); ++i)
+                        if (filaDe[i] < 0) filaDe[i] = filaAct;
+                }
+
+                // Ninguna palabra que quepa en una fila puede tener sus letras
+                // repartidas entre dos.
+                const i32 anchoU = rw.w - 16;
+                bool partida = false;
+                std::string culpable;
+                size_t i = 0;
+                while (i < txt.size()) {
+                    if (txt[i] == ' ') { ++i; continue; }
+                    size_t fin = i;
+                    while (fin < txt.size() && txt[fin] != ' ') ++fin;
+
+                    const std::string palabra = txt.substr(i, fin - i);
+                    if (font5x7::measureUtf8(palabra.c_str(), 1) <= anchoU) {
+                        i32 primera = -1;
+                        for (size_t k = i; k < fin; ++k) {
+                            if (filaDe[k] < 0) continue;
+                            if (primera < 0) primera = filaDe[k];
+                            else if (filaDe[k] != primera && !partida) {
+                                partida = true; culpable = palabra;
+                            }
+                        }
+                    }
+                    i = fin;
+                }
+                check("Al ajustar, una palabra baja ENTERA de linea",
+                      !partida,
+                      partida ? ("se partio '" + culpable + "'").c_str()
+                              : "ninguna palabra partida");
+
+                // Y la excepcion: una palabra mas larga que la caja no cabe en
+                // ninguna fila, asi que esa SI se parte. Bajarla entera solo
+                // dejaria filas vacias encadenadas.
+                TextField larga;
+                larga.setStyle(ml);
+                larga.setRect({ 10, 10, 70, 120 });
+                larga.setMaxLength(1000);
+                larga.setText("supercalifragilisticoespialidoso");
+                const size_t finPrimera =
+                    larga.indexAtPointForTest(10 + 69, 10 + 8);
+                std::snprintf(buf, sizeof(buf), "corta en %zu", finPrimera);
+                check("Una palabra mas larga que la caja si se parte",
+                      finPrimera > 0 && finPrimera < 32, buf);
+            }
+
+            // --- el Enter LLEGA desde la ventana ---
+            //
+            // BUG QUE ESTO PROTEGE, y era el que de verdad impedia saltar de
+            // linea: el filtro de WM_CHAR exigia `wp >= 32`, asi que el
+            // retorno de carro (13) se descartaba en la ventana y NUNCA
+            // llegaba a los campos. Todo lo demas del camino ya estaba hecho
+            // -- la escena traduce '\r' a '\n' y TextField sabe guardarlo --
+            // pero no servia de nada: pulsar Enter no hacia absolutamente
+            // nada al escribir una descripcion o un EULA.
+            //
+            // Por eso se comprueba desde el MENSAJE de Windows y no llamando a
+            // onChar(): el fallo estaba justo en ese tramo.
+            {
+                Input& inp = engine.input();
+                inp.newFrame(0.016);
+                SendMessageW(engine.window().handle(), WM_CHAR,
+                             static_cast<WPARAM>('\r'), 0);
+
+                bool llegoEnter = false;
+                for (const wchar_t ch : inp.charsTyped())
+                    if (ch == L'\r' || ch == L'\n') llegoEnter = true;
+                check("El Enter llega a la aplicacion como caracter",
+                      llegoEnter, "WM_CHAR con 13");
+
+                // Y el resto de codigos de control siguen fuera: son ordenes,
+                // no texto, y colarlos llenaria los campos de basura.
+                inp.newFrame(0.016);
+                SendMessageW(engine.window().handle(), WM_CHAR,
+                             static_cast<WPARAM>(7), 0);   // campana
+                bool colo = false;
+                for (const wchar_t ch : inp.charsTyped())
+                    if (ch == 7) colo = true;
+                check("Pero los demas codigos de control siguen fuera", !colo, "");
+                inp.newFrame(0.016);
+            }
+
             // --- controles de edicion estandar ---
             //
             // Son los que tiene cualquier editor y aqui faltaban: recorrer
