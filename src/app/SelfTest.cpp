@@ -4344,8 +4344,12 @@ void SelfTest::update(Engine& engine, f64 dt) {
                     sf.section(HomeScene::kDevSection);
                     sf.render(engine, probe);
 
-                    sf.setUploadNameForTest("Juego Sin Archivos");
-                    sf.setUploadCodeForTest(L"C:\\algo\\sinarch.exe");
+                    // La ficha entera, y CERRADA con TERMINE DE EDITAR: sin
+                    // eso el aviso seria el de la ficha y no el de los
+                    // archivos, que es lo que esta prueba mira.
+                    sf.fillUploadFormForTest("Juego Sin Archivos");
+                    sf.finishEditingForTest();
+                    sf.openDevPanelForTest(0);   // vuelve a SUBIR JUEGO
                     sf.setPriceT(0.7f);          // precio puesto
                     sf.publishUpload();
                     std::snprintf(buf, sizeof(buf), "aviso=%.2f s, tipo=%d",
@@ -4371,8 +4375,9 @@ void SelfTest::update(Engine& engine, f64 dt) {
                           pe.c_str());
 
                     for (i32 k = 0; k < 120; ++k) sf.update(engine, 0.016);
-                    sf.setUploadNameForTest("Juego Sin Archivos");
-                    sf.setUploadCodeForTest(L"C:\\algo\\sinarch.exe");
+                    sf.fillUploadFormForTest("Juego Sin Archivos");
+                    sf.finishEditingForTest();
+                    sf.openDevPanelForTest(0);
                     sf.setPriceT(0.7f);
                     sf.publishUpload();
                     std::snprintf(buf, sizeof(buf), "tipo=%d, exito=%d",
@@ -4396,28 +4401,36 @@ void SelfTest::update(Engine& engine, f64 dt) {
                           gp ? "publicado" : "no publicado");
                 }
 
-                // --- sin codigo subido no deja publicar ---
-                // Se comprueba ANTES del precio: es el paso anterior.
-                form.setUploadNameForTest("Juego Sin Codigo");
-                form.setPriceT(0.8f);        // precio puesto, codigo no
+                // --- con la ficha a medias no deja publicar ---
+                //
+                // Sustituye a la prueba de "sin codigo subido": esa zona del
+                // formulario se retiro (los archivos se suben en GUARDAR
+                // ARCHIVOS Y ACTUALIZAR), asi que lo que ahora frena el primer
+                // paso es que falte un campo de la ficha.
+                form.setUploadNameForTest("Juego A Medias");
+                form.setPriceT(0.8f);        // precio puesto, ficha no
                 form.publishUpload();
-                std::snprintf(buf, sizeof(buf), "aviso=%.2f s, tipo=%d",
-                              form.priceWarningLeft(), form.uploadWarningKind());
-                check("Sin codigo no se publica y salta el aviso",
+                std::snprintf(buf, sizeof(buf), "aviso=%.2f s, tipo=%d, falta=%d",
+                              form.priceWarningLeft(), form.uploadWarningKind(),
+                              form.missingUploadSlot());
+                check("Con la ficha a medias no se publica",
                       form.priceWarningLeft() > 0.0 &&
                       !form.uploadWarningIsOk(), buf);
-                check("Y el aviso es el del codigo, no el del precio",
-                      form.uploadWarningKind() == 1, buf);   // 1 = kWarnCode
+                check("Y el aviso dice que falta un campo, no el precio",
+                      form.uploadWarningKind() == 3, buf);   // 3 = kWarnCampo
+                check("Y senala el PRIMER campo que falta",
+                      form.missingUploadSlot() == 1, buf);   // 1 = descripcion
 
                 for (i32 k = 0; k < 100; ++k) form.update(engine, 0.016);
 
                 // --- el precio es obligatorio antes de guardar ---
                 // Con codigo ya elegido, el que falta es el precio: asi se
                 // comprueba ESE aviso y no el del paso anterior.
-                form.setUploadNameForTest("Juego Sin Precio");
-                form.setUploadCodeForTest(L"C:\\algo\\juego.exe");
-                // Los archivos tambien se comprueban antes que el precio, asi
-                // que se dan por guardados para aislar ESTE aviso.
+                // La ficha y los archivos se dan por hechos para aislar ESTE
+                // aviso: los dos se comprueban antes que el precio.
+                form.fillUploadFormForTest("Juego Sin Precio");
+                form.finishEditingForTest();
+                form.openDevPanelForTest(0);
                 {
                     std::string ea;
                     devcatalog::setArchive(L"catalogo-dev.dat",
@@ -4432,6 +4445,103 @@ void SelfTest::update(Engine& engine, f64 dt) {
                 check("Sin precio no se guarda y salta el aviso",
                       form.priceWarningLeft() > 0.0 &&
                       form.uploadWarningKind() == 0, buf);   // 0 = kWarnPrice
+
+                // --- el recorrido completo: ficha -> archivos -> precio ---
+                //
+                // Es lo que se pidio: PUBLICAR esta en gris hasta que las tres
+                // cosas estan hechas, y cada paso lleva al siguiente sin que
+                // el autor tenga que adivinar por donde seguir.
+                {
+                    HomeScene fl("flujo@ludora.engine");
+                    fl.onEnter(engine);
+                    fl.section(HomeScene::kDevSection);
+                    fl.openDevPanelForTest(0);          // SUBIR JUEGO
+                    fl.render(engine, probe);
+
+                    const char* kJ = "Juego Del Recorrido";
+
+                    // 1) Ficha vacia: ni completa ni publicable.
+                    check("Con la ficha vacia, PUBLICAR esta bloqueado",
+                          !fl.publishEnabled(), "");
+                    check("Y el primer campo que falta es el NOMBRE",
+                          fl.missingUploadSlot() == 0, "");
+
+                    // 2) Solo el nombre: sigue faltando el resto.
+                    fl.setUploadNameForTest(kJ);
+                    check("Con solo el nombre, la ficha no esta completa",
+                          !fl.uploadFormComplete(), "");
+                    check("Y PUBLICAR sigue bloqueado",
+                          !fl.publishEnabled(), "");
+
+                    // 3) TERMINE DE EDITAR con la ficha a medias: avisa y NO
+                    //    la da por cerrada.
+                    fl.finishEditingForTest();
+                    check("TERMINE DE EDITAR a medias no cierra la ficha",
+                          !fl.uploadFormConfirmed(), "");
+                    check("Y avisa de que falta un campo",
+                          fl.uploadWarningKind() == 3, "");   // kWarnCampo
+
+                    // 4) Ficha entera: ya se puede cerrar.
+                    fl.fillUploadFormForTest(kJ);
+                    check("Con los diez campos, la ficha esta completa",
+                          fl.uploadFormComplete(),
+                          std::to_string(fl.missingUploadSlot()).c_str());
+                    check("Pero hasta pulsar el boton no cuenta como cerrada",
+                          !fl.uploadFormConfirmed(), "");
+                    check("Y PUBLICAR aun esta bloqueado",
+                          !fl.publishEnabled(), "");
+
+                    // 5) Al cerrarla, lleva a GUARDAR ARCHIVOS.
+                    fl.finishEditingForTest();
+                    std::snprintf(buf, sizeof(buf), "panel=%d",
+                                  fl.devOpenPanel());
+                    check("Al cerrar la ficha, lleva a GUARDAR ARCHIVOS",
+                          fl.devOpenPanel() == 1, buf);   // 1 = kDevUpdate
+                    check("Y la ficha queda cerrada",
+                          fl.uploadFormConfirmed(), "");
+                    check("Pero PUBLICAR sigue gris: faltan los archivos",
+                          !fl.publishEnabled(), "");
+
+                    // 6) Con los archivos guardados, falta el precio.
+                    {
+                        std::string ef;
+                        devcatalog::setArchive(L"catalogo-dev.dat", kJ,
+                                               L"recorrido.tomate", 5, 2048, ef);
+                    }
+                    fl.setPriceT(0.0f);          // GRATIS = sin decidir
+                    check("Con archivos pero sin precio, PUBLICAR sigue gris",
+                          !fl.publishEnabled(), "");
+
+                    // 7) Con el precio puesto, ya se puede publicar.
+                    fl.setPriceT(0.5f);
+                    check("Con ficha, archivos y precio, PUBLICAR se habilita",
+                          fl.publishEnabled(), "");
+
+                    // 8) Y si despues se vacia un campo, vuelve a bloquearse:
+                    //    la ficha deja de estar terminada.
+                    fl.setUploadNameForTest("");
+                    fl.update(engine, 0.016);
+                    check("Vaciar un campo vuelve a bloquear PUBLICAR",
+                          !fl.publishEnabled(), "");
+                    check("Y la ficha deja de estar cerrada",
+                          !fl.uploadFormConfirmed(), "");
+                }
+
+                // --- el pilar central no se puede pulsar ---
+                //
+                // Era la zona SUBIR ARCHIVOS. Ahora es una raya decorativa: si
+                // siguiera respondiendo al raton, abriria un selector de
+                // carpeta que ya no lleva a ninguna parte.
+                {
+                    const Recti pil = form.uploadDropRect();
+                    std::snprintf(buf, sizeof(buf), "pilar %dx%d", pil.w, pil.h);
+                    check("El pilar central es estrecho, no un panel",
+                          pil.w > 0 && pil.w <= 8, buf);
+                    form.setUploadDropHover(true);
+                    form.update(engine, 0.016);
+                    check("Y el raton no lo marca como pulsable",
+                          !form.uploadDropHover(), "");
+                }
 
                 // --- el aviso se SUPERPONE a los botones ---
                 // Se comprueba leyendo pixeles: se elige un punto que cae

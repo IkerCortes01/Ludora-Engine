@@ -5579,6 +5579,7 @@ bool HomeScene::applyManualAge() {
     if (m_upAgeMaxT < m_upAgeT) m_upAgeMaxT = m_upAgeT;
     m_ageRangeSel = -1;     // deja de haber tramo elegido: manda lo escrito
     m_ageAiPick   = -1;
+    m_upAgeTocado = true;   // escribir la edad es elegirla
 
     char buf[96];
     std::snprintf(buf, sizeof(buf), "Edad fijada en %d años.", n);
@@ -5591,6 +5592,7 @@ void HomeScene::pickAgeRange(i32 i) {
     if (i < 0 || i >= kAgeRanges) return;
     m_ageRangeSel = i;
     m_ageAiPick   = -1;
+    m_upAgeTocado = true;   // elegir un tramo es elegir la edad
 
     // Un tramo son DOS edades, y ahora la ficha guarda las dos: se fijan los
     // dos carriles de una vez. Antes solo entraba la menor porque no habia
@@ -5619,6 +5621,7 @@ void HomeScene::rollAgeAi() {
 
     m_ageAiPick   = static_cast<i32>(v % static_cast<u32>(kAgeAiOpts));
     m_ageRangeSel = -1;
+    m_upAgeTocado = true;   // aceptar la propuesta tambien vale
     m_ageAiSpin   = 0.9;        // el parpadeo del sorteo
 
     const i32 n = kPropuestasAi[m_ageAiPick].desde;
@@ -5694,6 +5697,7 @@ void HomeScene::layoutUpload(Recti area) {
     if (area.w <= 40 || area.h <= 40) {
         for (i32 i = 0; i < kUploadSlots; ++i) m_upRects[i] = Recti{};
         m_upDropRect = m_upPanelRect = m_upPublishRect = m_upSaveRect = Recti{};
+        m_upDoneRect = Recti{};
         return;
     }
 
@@ -5746,11 +5750,29 @@ void HomeScene::layoutUpload(Recti area) {
     // consultan. Con w = 0 nada se dibuja ni responde al raton.
     m_upSaveRect = Recti{};
 
-    // --- rectangulo vertical de subida, entre las dos columnas ---
-    const i32 dropY = filasY0;
-    const i32 dropH = std::max(1, (filasY0 + kUpPerSide * btnH +
-                                   (kUpPerSide - 1) * kUpGap) - dropY);
-    m_upDropRect = Recti{ izqX + colW + kUpGap, dropY, dropW, dropH };
+    // --- TERMINE DE EDITAR, en el hueco que queda bajo el EULA ---
+    //
+    // La columna derecha tiene cinco filas y solo cuatro campos, asi que la
+    // ultima estaba vacia. Ahi va el boton que cierra la ficha: justo debajo
+    // del EULA, que es el ultimo campo que se rellena.
+    m_upDoneRect = Recti{ derX, filasY0 + (kUpPerSide - 1) * (btnH + kUpGap),
+                          colW, btnH };
+
+    // --- pilar central, entre las dos columnas ---
+    //
+    // Aqui estaba SUBIR ARCHIVOS. Se quito porque duplicaba el trabajo de
+    // GUARDAR ARCHIVOS Y ACTUALIZAR, que es donde se suben de verdad: tener
+    // dos sitios para lo mismo solo servia para dejar el juego a medias en uno
+    // de los dos. Lo que queda es una raya negra que separa las columnas, sin
+    // nada que pulsar.
+    const i32 pilarY = filasY0;
+    const i32 pilarH = std::max(1, (filasY0 + kUpPerSide * btnH +
+                                    (kUpPerSide - 1) * kUpGap) - pilarY);
+    // Estrecho: es un separador, no un panel. Se centra en el hueco que ya
+    // reservaba la zona de subida para no mover las dos columnas de sitio.
+    const i32 pilarW = std::max(2, std::min(6, dropW / 6));
+    m_upDropRect = Recti{ izqX + colW + kUpGap + (dropW - pilarW) / 2,
+                          pilarY, pilarW, pilarH };
 
     // --- panel del campo abierto ---
     // Se superpone al formulario, anclado dentro de la mini-seccion. Ocupa
@@ -5910,6 +5932,15 @@ void HomeScene::updateDev(Engine& engine, f64 dt) {
                 loadListing(g.listing);
                 m_upEditing = g.name;
             }
+
+            // La ficha sigue dada por terminada al volver aqui.
+            //
+            // Es el ultimo tramo del recorrido: ficha -> archivos -> precio ->
+            // y de vuelta a SUBIR para publicar. Si el paso por PRECIOS
+            // apagara la confirmacion, el autor volveria para encontrarse
+            // PUBLICAR en gris otra vez y tendria que cerrar la ficha de
+            // nuevo, sin haber tocado un solo campo.
+            if (missingUploadSlot() < 0) m_upFichaLista = true;
         }
         return;   // durante la palomita no se atiende nada mas
     }
@@ -6293,29 +6324,14 @@ void HomeScene::openDevPanel(i32 panel) {
     }
 }
 
-void HomeScene::pickGameFolder(Engine& engine) {
-    // Un juego es una CARPETA (ejecutable + recursos), no un archivo suelto:
-    // es lo UNICO que la zona de subida acepta desde que se retiro el modo de
-    // archivo. SHBrowseForFolder es la via sin dependencias para pedirla: la
-    // alternativa moderna (IFileDialog con FOS_PICKFOLDERS) obliga a COM y a
-    // enlazar ole32, y aqui no compensa.
-    BROWSEINFOW bi{};
-    bi.hwndOwner = engine.window().handle();
-    bi.lpszTitle = L"Subir los archivos del juego (carpeta completa)";
-    bi.ulFlags   = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
-
-    LPITEMIDLIST pidl = SHBrowseForFolderW(&bi);
-    if (!pidl) return;   // cancelar no es un error
-
-    wchar_t ruta[MAX_PATH]{};
-    const bool ok = SHGetPathFromIDListW(pidl, ruta) != FALSE;
-    CoTaskMemFree(pidl);   // el shell reserva el PIDL; liberarlo es del llamante
-    if (!ok) return;
-
-    m_upCodePath = ruta;
-    m_devMsg     = "Carpeta recibida: " + nombreVisible(m_upCodePath);
-    m_devMsgErr  = false;
-}
+// Aqui vivia pickGameFolder(), que abria el selector de carpeta de la zona
+// SUBIR ARCHIVOS del formulario. Se retira entera con la zona: los archivos de
+// un juego se suben en GUARDAR ARCHIVOS Y ACTUALIZAR, que es donde se
+// empaquetan y se cifran. Tener dos sitios para lo mismo solo servia para
+// acabar con el juego a medias en uno de los dos.
+//
+// La que hace ese trabajo de verdad es pickArchiveFolder(), en la otra
+// mini-seccion.
 
 void HomeScene::pickPromoArt(Engine& engine) {
     const std::wstring elegida = photo::pickFromGallery(engine.window().handle());
@@ -6626,6 +6642,12 @@ void HomeScene::loadListing(const devcatalog::Listing& l) {
     m_upAgeMaxT = std::clamp((l.maxAge - kUpAgeMin) / rangoAge, 0.0f, 1.0f);
     if (m_upAgeMaxT < m_upAgeT) m_upAgeMaxT = m_upAgeT;
 
+    // Una ficha que YA se publico trae sus dos deslizadores decididos: se dan
+    // por tocados. Si no, editar un juego existente pediria volver a mover
+    // unos valores que su autor ya eligio en su dia.
+    m_upPerfTocado = true;
+    m_upAgeTocado  = true;
+
     m_upPirateConsent = l.piracy;
     m_upCustomConsent = l.customize;
     m_upCodePath      = l.source;
@@ -6682,25 +6704,166 @@ void HomeScene::loadListing(const devcatalog::Listing& l) {
                      [](i32 i) { return uploadMultiLabel(i); }, m_upMulti);
 }
 
+void HomeScene::fillUploadFormForTest(const std::string& nombre) {
+    m_upNameField.setText(nombre);
+    m_upDescField.setText("Un juego de prueba con su descripcion.");
+
+    m_upGenreField.setText(uploadGenreLabel(0));
+    m_upGenres.assign(1, 0);
+    m_upMultiField.setText(uploadMultiLabel(0));
+    m_upMulti.assign(1, 0);
+
+    m_upFpsT = 0.5f;  m_upPerfTocado = true;
+    m_upAgeT = 0.2f;  m_upAgeMaxT = 0.6f;  m_upAgeTocado = true;
+
+    m_upPirateConsent = kConsentYes;
+    m_upCustomConsent = kConsentYes;
+    m_upArtPath       = L"portada-de-prueba.png";
+    m_eulaField[kEulaLocal].setText("Reglas de la prueba.");
+
+    m_upFichaLista = false;   // llenarla no es cerrarla
+}
+
+const char* HomeScene::uploadSlotLabel(i32 i) {
+    switch (i) {
+        case kUpName:   return "NOMBRE DEL JUEGO";
+        case kUpDesc:   return "DESCRIPCION";
+        case kUpGenre:  return "GENERO";
+        case kUpPerf:   return "RENDIMIENTO";
+        case kUpAge:    return "EDAD RECOMENDADA";
+        case kUpMulti:  return "TIPO DE MULTIJUGADOR";
+        case kUpPirate: return "PERMISO DE PIRATERIA";
+        case kUpArt:    return "DISENO DE SECCION";
+        case kUpCustom: return "PERMITIR PERSONALIZACION";
+        case kUpEula:   return "EULA PROPIO";
+        default:        return "";
+    }
+}
+
+i32 HomeScene::missingUploadSlot() const {
+    // El orden es el de la enumeracion, que es el que ve el autor de arriba
+    // abajo: asi el aviso nombra siempre el primero que le falta, y no uno de
+    // mas abajo que confundiria sobre por donde seguir.
+
+    if (m_upNameField.text().empty())  return kUpName;
+    if (m_upDescField.text().empty())  return kUpDesc;
+
+    // Los dos campos de etiquetas cuentan como puestos cuando hay AL MENOS
+    // una marcada. El texto solo con su caracter inicial ("#" o "@") esta
+    // vacio en la practica, y por eso se mira la lista y no el campo.
+    if (m_upGenres.empty())            return kUpGenre;
+
+    // RENDIMIENTO y EDAD son deslizadores: siempre tienen un valor, asi que
+    // no se pueden comprobar por "vacio". Lo que se exige es haberlos TOCADO,
+    // que es lo que distingue un valor elegido de uno por defecto.
+    if (!m_upPerfTocado)               return kUpPerf;
+    if (!m_upAgeTocado)                return kUpAge;
+
+    if (m_upMulti.empty())             return kUpMulti;
+
+    // Los dos avisos valen contestados de cualquiera de las dos formas: decir
+    // "no permito pirateria" es una respuesta tan valida como decir que si.
+    if (m_upPirateConsent == kConsentNone)  return kUpPirate;
+    if (m_upArtPath.empty())                return kUpArt;
+    if (m_upCustomConsent == kConsentNone)  return kUpCustom;
+
+    // El EULA se da por puesto con que UNO de los tres bloques tenga texto:
+    // no todos los juegos tienen reglas de multijugador o de moding.
+    bool hayEula = false;
+    for (i32 b = 0; b < kEulaBlocks; ++b)
+        if (!m_eulaField[b].text().empty()) { hayEula = true; break; }
+    if (!hayEula) return kUpEula;
+
+    return -1;
+}
+
+bool HomeScene::publishEnabled() const {
+    // PUBLICAR pide las TRES cosas, en este orden:
+    //   1) la ficha terminada (los diez campos, y el boton pulsado),
+    //   2) los archivos del juego guardados,
+    //   3) el precio decidido.
+    // Mientras falte cualquiera, el boton se ve gris y no publica.
+    if (!m_upFichaLista || missingUploadSlot() >= 0) return false;
+
+    const std::string nombre = m_upNameField.text();
+    if (nombre.empty()) return false;
+    if (!devcatalog::hasArchive(kDevCatalogFile, nombre)) return false;
+
+    const bool precioGuardado =
+        devcatalog::getPending(kDevCatalogFile, nombre).priceSet;
+    return m_priceAccepted || precioGuardado || m_priceT > 0.0f;
+}
+
+void HomeScene::finishUploadEditing() {
+    // --- se comprueban los diez campos ---
+    const i32 falta = missingUploadSlot();
+    if (falta >= 0) {
+        m_upFichaLista = false;
+        m_upPriceWarn  = 1.2;
+        m_upWarnOk     = false;
+        m_upWarnKind   = kWarnCampo;
+        m_upWarnSlot   = falta;
+        m_devMsg.clear();
+        return;
+    }
+
+    // --- la ficha queda cerrada ---
+    m_upFichaLista = true;
+    m_upOpen       = kUpNone;
+    m_upPriceWarn  = 0.0;
+
+    // Y se lleva al paso siguiente, que es guardar los archivos. Dejarlo aqui
+    // obligaria a adivinar que toca ahora: el boton acaba de decir que la
+    // ficha esta lista, y lo natural es continuar, no quedarse mirandola.
+    //
+    // El nombre viaja a la otra mini-seccion para que el autor no tenga que
+    // volver a escribirlo ni a buscar su codigo.
+    openDevPanel(kDevUpdate);
+    m_devMsg    = "Ficha terminada. Ahora guarda los archivos del juego.";
+    m_devMsgErr = false;
+}
+
 void HomeScene::submitUpload() {
     const std::string nombre = m_upNameField.text();
+
+    // --- la ficha tiene que estar completa ---
+    //
+    // Se comprueba lo PRIMERO: es el paso inicial, y avisar del precio o de
+    // los archivos antes mandaria a arreglar lo ultimo antes que lo primero.
+    // El boton ya se ve gris, asi que esto solo ocurre si se pulsa igualmente,
+    // y entonces conviene decir exactamente que falta.
+    const i32 falta = missingUploadSlot();
+    if (falta >= 0) {
+        m_upPriceWarn = 1.2;
+        m_upWarnOk    = false;
+        m_upWarnKind  = kWarnCampo;
+        m_upWarnSlot  = falta;
+        m_devMsg.clear();
+        return;
+    }
+    if (!m_upFichaLista) {
+        m_upPriceWarn = 1.2;
+        m_upWarnOk    = false;
+        m_upWarnKind  = kWarnFicha;
+        m_devMsg.clear();
+        return;
+    }
+
     if (nombre.empty()) {
         m_devMsg    = "Primero escribe el nombre del juego.";
         m_devMsgErr = true;
         return;
     }
 
-    // --- el codigo es obligatorio ---
-    // Se comprueba ANTES del precio porque es el paso anterior: sin archivos
-    // no hay juego que publicar, y avisar del precio primero mandaria a
-    // arreglar lo segundo antes que lo primero.
-    if (m_upCodePath.empty()) {
-        m_upPriceWarn = 1.2;
-        m_upWarnOk    = false;
-        m_upWarnKind  = kWarnCode;
-        m_devMsg.clear();
-        return;
-    }
+    // Aqui se exigia ademas `m_upCodePath`, la carpeta elegida en la zona
+    // SUBIR ARCHIVOS del formulario. Esa zona ya no existe -- los archivos se
+    // suben en GUARDAR ARCHIVOS Y ACTUALIZAR, que es donde se empaquetan de
+    // verdad -- asi que la variable ya no la llena nadie y la comprobacion
+    // habria bloqueado TODA publicacion, incluso con el juego guardado.
+    //
+    // Lo que de verdad hace falta se comprueba justo debajo: que exista el
+    // paquete. Esa condicion es mas fuerte que tener una ruta apuntada, porque
+    // una ruta al disco del autor no sirve para que otro descargue nada.
 
     // --- los archivos son obligatorios ---
     // Sin el paquete guardado, publicar solo deja una ruta al PC del autor y
@@ -7111,6 +7274,13 @@ void HomeScene::updateUpload(Engine& engine, f64 dt) {
         if (m_upPriceWarn < 0.0) m_upPriceWarn = 0.0;
     }
 
+    // Si despues de cerrar la ficha se vacia un campo, deja de estar cerrada.
+    //
+    // La confirmacion dice "esto esta terminado", y borrar la descripcion
+    // despues de pulsarla lo desmiente. Sin esto se podria publicar un juego
+    // con campos vacios con solo cerrar la ficha antes de vaciarlos.
+    if (m_upFichaLista && missingUploadSlot() >= 0) m_upFichaLista = false;
+
     const f32 sc = std::max(0.01f, engine.window().contentScale());
     const i32 lx = static_cast<i32>(in.mousePos().x / sc);
     const i32 ly = static_cast<i32>(in.mousePos().y / sc);
@@ -7133,12 +7303,15 @@ void HomeScene::updateUpload(Engine& engine, f64 dt) {
 
             if (m_upFpsDrag) {
                 m_upFpsT = t;
+                m_upPerfTocado = true;   // el valor ya es una eleccion
             } else if (m_upAgeMaxDrag) {
                 // Topa en la minima: la franja no se invierte.
                 m_upAgeMaxT = std::max(t, m_upAgeT);
+                m_upAgeTocado = true;
             } else {
                 m_upAgeT = t;
                 if (m_upAgeT > m_upAgeMaxT) m_upAgeMaxT = m_upAgeT;
+                m_upAgeTocado = true;
             }
         }
         if (in.mouseReleased(0))
@@ -7231,19 +7404,25 @@ void HomeScene::updateUpload(Engine& engine, f64 dt) {
                 // invertirse arrastrando.
                 m_upAgeMaxT    = std::max(tDe(m_upTrack2Rect), m_upAgeT);
                 m_upAgeMaxDrag = true;
+                // Se marca ya al PULSAR, no solo al arrastrar: un clic seco
+                // sobre el carril coloca el selector y suelta sin llegar a
+                // moverse, y eso tambien es elegir un valor.
+                m_upAgeTocado  = true;
                 return;
             }
 
             if (dentro(m_upKnobRect) || sobre(m_upTrackRect, m_upKnobRect)) {
                 const f32 t = tDe(m_upTrackRect);
-                if (m_upOpen == kUpPerf) { m_upFpsT = t; m_upFpsDrag = true; }
-                else {
+                if (m_upOpen == kUpPerf) {
+                    m_upFpsT = t; m_upFpsDrag = true; m_upPerfTocado = true;
+                } else {
                     // Y la minima no sube por encima de la maxima, por lo
                     // mismo. Se empuja la otra en vez de bloquear el
                     // arrastre: bloquear se siente como que el raton falla.
                     m_upAgeT = t;
                     if (m_upAgeT > m_upAgeMaxT) m_upAgeMaxT = m_upAgeT;
-                    m_upAgeDrag = true;
+                    m_upAgeDrag   = true;
+                    m_upAgeTocado = true;
                 }
                 return;
             }
@@ -7257,14 +7436,15 @@ void HomeScene::updateUpload(Engine& engine, f64 dt) {
         return;   // con un panel abierto, los botones no responden
     }
 
-    // --- zona de subida central ---
-    // Guarda CARPETAS COMPLETAS, y solo eso. Antes el clic izquierdo elegia un
-    // archivo suelto y el derecho una carpeta, pero un juego es un arbol
-    // (ejecutable + recursos): subir un archivo solo dejaba publicado algo que
-    // no se podia jugar. Ahora cualquiera de los dos botones pide la carpeta.
-    m_upDropHover = dentro(m_upDropRect);
-    if (in.mousePressed(0) && m_upDropHover) m_upDropDown = true;
-    if (in.mouseReleased(1) && m_upDropHover) pickGameFolder(engine);
+    // --- pilar central ---
+    // Ya no se sube nada aqui: es una raya decorativa. Se deja a cero para
+    // que ningun clic la alcance y para que el dibujo no la resalte.
+    m_upDropHover = false;
+    m_upDropDown  = false;
+
+    // --- boton TERMINE DE EDITAR ---
+    m_upDoneHover = dentro(m_upDoneRect);
+    if (in.mousePressed(0) && m_upDoneHover) m_upDoneDown = true;
 
     // --- boton PUBLICAR ---
     m_upPublishHover = dentro(m_upPublishRect);
@@ -7285,8 +7465,8 @@ void HomeScene::updateUpload(Engine& engine, f64 dt) {
     if (in.mouseReleased(0)) {
         if (m_upPublishDown && m_upPublishHover) {
             submitUpload();
-        } else if (m_upDropDown && m_upDropHover) {
-            pickGameFolder(engine);
+        } else if (m_upDoneDown && m_upDoneHover) {
+            finishUploadEditing();
         } else if (m_upDown >= 0 && m_upDown == m_upHover) {
             // El EULA no abre un panel dentro del formulario: se lleva toda
             // la ventana, porque son tres textos largos que hay que poder
@@ -7310,6 +7490,7 @@ void HomeScene::updateUpload(Engine& engine, f64 dt) {
         m_upDropDown    = false;
         m_upPublishDown = false;
         m_upSaveDown    = false;
+        m_upDoneDown    = false;
     }
 }
 
@@ -8316,7 +8497,11 @@ void HomeScene::drawDevUpload(Framebuffer& fb, Recti area) {
     // puede publicar y conviene que se vea antes de pulsarlo.
     if (m_upPublishRect.w > 0) {
         Recti pr = m_upPublishRect;
-        const bool listo = !m_upNameField.text().empty();
+        // Verde SOLO cuando se puede publicar de verdad: ficha terminada,
+        // archivos guardados y precio decidido. Antes bastaba con que hubiera
+        // nombre, asi que el boton se veia listo cuando aun faltaban dos pasos
+        // y solo al pulsarlo se descubria cual.
+        const bool listo = publishEnabled();
         const bool hovP  = m_upPublishHover && m_upOpen < 0;
 
         auto ajustaP = [&](Color c, f32 k) {
@@ -8366,51 +8551,44 @@ void HomeScene::drawDevUpload(Framebuffer& fb, Recti area) {
                             avisando ? kWhite : (listo ? kWhite : kDim), 1, 4);
     }
 
-    // --- rectangulo vertical de subida, en el centro ---
+    // --- pilar central ---
+    //
+    // Lo que queda de la antigua zona SUBIR ARCHIVOS: una raya negra que
+    // separa las dos columnas. No se pulsa ni responde al raton.
     const Recti d = m_upDropRect;
     if (d.w > 0 && d.h > 0) {
-        const bool hov = m_upDropHover && m_upOpen < 0;
-        // Verde solo con el cursor encima: es la senal de que ahi se suelta.
-        const Color borde = hov ? kUpDropHover : kUpDropEdge;
-        fb.fillRect(d, hov ? Color{ 16, 46, 26 } : kFieldBg);
-        fb.drawRect(d, borde, hov ? 3 : 2);
+        fb.fillRect(d, Color{ 0, 0, 0 });
+        // Un filo apenas mas claro a cada lado para que la raya se despegue
+        // del fondo, que tambien es oscuro: sin el, el pilar desaparece.
+        fb.drawRect(d, kPanelEdge, 1);
+    }
 
-        // Simbolo + giratorio, centrado en el rectangulo.
-        const i32 cx = d.x + d.w / 2;
-        const i32 cy = d.y + d.h / 2;
-        const i32 r  = std::min(kUpPlusR, std::max(4, std::min(d.w, d.h) / 3));
-        drawSpinningPlus(fb, cx, cy, r, m_upPlusTime, hov ? kUpDropHover : kGlyph);
+    // --- TERMINE DE EDITAR, bajo el EULA ---
+    if (m_upDoneRect.w > 0 && m_upDoneRect.h > 0) {
+        const Recti rr   = m_upDoneRect;
+        const bool  hov  = m_upDoneHover && m_upOpen < 0;
+        const i32   falta = missingUploadSlot();
+        const bool  listo = (falta < 0);
 
-        // Rotulo en dos lineas: "SUBIR" / "ARCHIVOS". En una sola no cabria en
-        // un rectangulo estrecho y vertical.
-        const char* l1 = "SUBIR";
-        const char* l2 = "ARCHIVOS";
-        const i32 w1 = font5x7::measure(l1, 1);
-        const i32 w2 = font5x7::measure(l2, 1);
-        if (w2 < d.w - 4) {
-            const Color ct = hov ? kUpDropHover : kGlyph;
-            font5x7::drawText(fb, cx - w1 / 2, cy + r + 10, l1, ct, 1);
-            font5x7::drawText(fb, cx - w2 / 2, cy + r + 21, l2, ct, 1);
+        // Verde cuando la ficha ya esta cerrada, ambar cuando se puede cerrar
+        // y apagado cuando aun falta algo: el color dice en que punto va sin
+        // tener que pulsarlo.
+        const Color base = m_upFichaLista ? kConsentGreen
+                         : listo          ? kNeonYellow
+                                          : kFieldBg;
+        auto ajusta = [&](Color c, f32 k) {
+            return Color{ static_cast<u8>(std::clamp(c.r * k, 0.0f, 255.0f)),
+                          static_cast<u8>(std::clamp(c.g * k, 0.0f, 255.0f)),
+                          static_cast<u8>(std::clamp(c.b * k, 0.0f, 255.0f)) };
+        };
+        fb.fillRect(rr, m_upDoneDown ? ajusta(base, 0.7f)
+                      : hov          ? ajusta(base, 1.25f) : base);
+        fb.drawRect(rr, m_upFichaLista ? kConsentGreen
+                      : listo          ? kNeonYellow : kPanelEdge, 2);
 
-            // Se dice que pide una CARPETA ENTERA, que es lo unico que acepta:
-            // si no, se queda esperando que alguien adivine por que el
-            // selector no deja elegir un archivo.
-            const char* h1 = "CARPETA";
-            const char* h2 = "COMPLETA";
-            const i32 hw1 = font5x7::measure(h1, 1);
-            const i32 hw2 = font5x7::measure(h2, 1);
-            if (hw2 < d.w - 4 && cy + r + 56 < d.y + d.h) {
-                font5x7::drawText(fb, cx - hw1 / 2, cy + r + 38, h1, kDim, 1);
-                font5x7::drawText(fb, cx - hw2 / 2, cy + r + 49, h2, kDim, 1);
-            }
-        }
-
-        // Si ya se eligio una carpeta, se marca con una palomita verde.
-        if (!m_upCodePath.empty()) {
-            const char* ok = "OK";
-            const i32 ow = font5x7::measure(ok, 1);
-            font5x7::drawText(fb, cx - ow / 2, d.y + 8, ok, kOk, 1);
-        }
+        const char* txt = m_upFichaLista ? "FICHA LISTA" : "TERMINÉ DE EDITAR";
+        font5x7::drawFitted(fb, rr, txt,
+                            (m_upFichaLista || listo) ? kBg : kDim, 1, 6);
     }
 
     // --- panel del campo abierto, por encima del formulario ---
@@ -8429,15 +8607,28 @@ void HomeScene::drawDevUpload(Framebuffer& fb, Recti area) {
         // El mensaje de exito es largo: en una linea caeria a la escala
         // minima y se leeria mas pequeno que el error, justo al reves de lo
         // que toca. Se parte en dos para poder dibujarlo grande.
+        // El aviso de campo que falta se arma aparte: lleva el NOMBRE del
+        // campo, asi que no puede ser una cadena fija como los demas.
+        char faltaBuf[96] = {0};
+        if (!exito && m_upWarnKind == kWarnCampo)
+            std::snprintf(faltaBuf, sizeof(faltaBuf), "Te falta: %s",
+                          uploadSlotLabel(m_upWarnSlot));
+
         const char* l1 = exito ? "¡Subido a la Tienda!"
+                       : (m_upWarnKind == kWarnCampo) ? faltaBuf
+                       : (m_upWarnKind == kWarnFicha) ? "Cierra la ficha!"
                        : (m_upWarnKind == kWarnCode)  ? "Sube los archivos primero!"
                        : (m_upWarnKind == kWarnFiles) ? "Guarda los archivos!"
                                                       : "Pon precio antes!";
         const char* l2 = exito ? "gracias por dar tu proyecto"
+                       : (m_upWarnKind == kWarnCampo)
+                           ? "completa ese campo para seguir"
+                       : (m_upWarnKind == kWarnFicha)
+                           ? "pulsa TERMINÉ DE EDITAR"
                        : (m_upWarnKind == kWarnCode)
                            ? "la carpeta completa del juego"
                        : (m_upWarnKind == kWarnFiles)
-                           ? "usa ACTUALIZAR JUEGO" : nullptr;
+                           ? "usa GUARDAR ARCHIVOS Y ACTUALIZAR" : nullptr;
 
         i32 escA = 4;
         while (escA > 1 &&

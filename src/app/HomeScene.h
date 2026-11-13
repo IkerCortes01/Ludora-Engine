@@ -125,6 +125,26 @@ public:
     Recti uploadDropRect() const     { return m_upDropRect; }
     Recti uploadPanelRect() const    { return m_upPanelRect; }
     i32   uploadOpenSlot() const     { return m_upOpen; }
+
+    // --- estado de la ficha (para pruebas y para la interfaz) ---
+    Recti uploadDoneRect() const     { return m_upDoneRect; }
+    /// true si los DIEZ campos del formulario estan puestos.
+    bool  uploadFormComplete() const { return missingUploadSlot() < 0; }
+    /// Primer campo sin rellenar, o -1 si no falta ninguno. El orden es el de
+    /// UploadSlot, asi que el aviso nombra el que toca arreglar antes.
+    i32   missingUploadSlot() const;
+    /// Etiqueta de un campo, para decir cual falta.
+    static const char* uploadSlotLabel(i32 i);
+    /// true si la ficha se dio por terminada con TERMINE DE EDITAR.
+    bool  uploadFormConfirmed() const { return m_upFichaLista; }
+    /// true si PUBLICAR esta habilitado ahora mismo.
+    bool  publishEnabled() const;
+    /// Pulsa TERMINE DE EDITAR sin simular el raton.
+    void  finishEditingForTest()     { finishUploadEditing(); }
+    /// Rellena los DIEZ campos de la ficha de golpe, para no tener que
+    /// simular diez interacciones en cada prueba que solo quiere llegar al
+    /// paso siguiente. `nombre` vacio deja ese campo sin poner a proposito.
+    void  fillUploadFormForTest(const std::string& nombre);
     /// Abre una mini-seccion del Modo Desarrollador sin simular el clic.
     void  openDevPanelForTest(i32 i)    { m_devPanel = i; }
     /// Abre uno de los diez campos del formulario de subida.
@@ -983,7 +1003,9 @@ private:
     /// Abre el dialogo de Windows y registra la CARPETA elegida. Es lo unico
     /// que la zona de subida acepta: un juego es un arbol de archivos, no un
     /// archivo suelto.
-    void pickGameFolder(Engine& engine);
+    // pickGameFolder() se retiro con la zona SUBIR ARCHIVOS del formulario:
+    // los archivos se suben en GUARDAR ARCHIVOS Y ACTUALIZAR, con
+    // pickArchiveFolder().
     /// Elige la imagen promocional del campo 8 y la carga para previsualizar.
     void pickPromoArt(Engine& engine);
     /// Dibuja un aviso de condiciones con sus dos botones. Devuelve el alto
@@ -1000,6 +1022,9 @@ private:
     void loadListing(const devcatalog::Listing& l);
     /// Publica (o actualiza) el juego con lo que hay ahora en el formulario.
     void submitUpload();
+    /// Cierra la parte de la ficha: comprueba los diez campos y, si estan,
+    /// la da por terminada y lleva a GUARDAR ARCHIVOS.
+    void finishUploadEditing();
 
     // --- ficha del producto ---
     void layoutProduct(Engine& engine, i32 fbW, i32 fbH);
@@ -1254,7 +1279,23 @@ private:
     enum Consent { kConsentNone = 0, kConsentYes = 1, kConsentNo = 2 };
 
     Recti m_upRects[kUploadSlots]{};   // los diez botones
-    Recti m_upDropRect{};              // rectangulo vertical de subida
+    Recti m_upDropRect{};              // pilar central (decorativo, ver layout)
+
+    // --- boton TERMINE DE EDITAR, bajo el EULA ---
+    //
+    // Cierra la parte de la FICHA. Comprueba que los diez campos estan puestos
+    // y, si es asi, lleva a GUARDAR ARCHIVOS, que es el paso siguiente. No
+    // publica nada: publicar sigue necesitando archivos y precio.
+    Recti m_upDoneRect{};
+    bool  m_upDoneHover = false, m_upDoneDown = false;
+
+    /// true cuando la ficha se dio por terminada con el boton.
+    ///
+    /// Se guarda aparte de "estan los diez campos" a proposito: el autor puede
+    /// tener todo escrito y seguir retocando, y PUBLICAR no debe encenderse a
+    /// mitad de una frase. Se enciende al pulsar el boton, y se apaga solo si
+    /// despues se vacia algun campo.
+    bool  m_upFichaLista = false;
     Recti m_upPanelRect{};             // panel del campo abierto
     i32   m_upHover = kUpNone;
     i32   m_upDown  = kUpNone;
@@ -1269,6 +1310,15 @@ private:
 
     /// Generos marcados, por indice en la tabla kUpGenres.
     std::vector<i32> m_upGenres;
+
+    /// Deslizadores TOCADOS alguna vez.
+    ///
+    /// RENDIMIENTO y EDAD siempre tienen un valor, asi que no se puede saber
+    /// si estan "puestos" mirando su contenido como en los campos de texto.
+    /// Lo que distingue un valor ELEGIDO de uno por defecto es que el autor
+    /// haya pasado por ahi, y eso es lo que se anota.
+    bool m_upPerfTocado = false;
+    bool m_upAgeTocado  = false;
 
     f32  m_upFpsT = 0.0f;              // 0..1 sobre [kUpFpsMin, kUpFpsMax]
     /// Extremos de la franja de edad, los dos sobre [kUpAgeMin, kUpAgeMax].
@@ -1388,8 +1438,16 @@ private:
     bool  m_upWarnOk = false;
     /// Que dice el aviso rojo. Los dos errores comparten franja y temblor,
     /// solo cambia el texto.
-    enum UpWarn { kWarnPrice = 0, kWarnCode = 1, kWarnFiles = 2 };
+    enum UpWarn {
+        kWarnPrice = 0,   // falta decidir el precio
+        kWarnCode  = 1,   // falta la carpeta del juego
+        kWarnFiles = 2,   // faltan los archivos guardados
+        kWarnCampo = 3,   // falta un campo de la ficha (dice cual)
+        kWarnFicha = 4,   // la ficha esta llena pero sin cerrar con el boton
+    };
     i32   m_upWarnKind = kWarnPrice;
+    /// Campo que falta cuando el aviso es kWarnCampo. Es un UploadSlot.
+    i32   m_upWarnSlot = kUpName;
 
     // --- ACEPTAR PRECIO: bajo la barrita de la mini-seccion PRECIOS ---
     // Mismo aspecto que GUARDAR Y SUBIR (remolino verde/violeta): las dos son
