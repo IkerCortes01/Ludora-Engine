@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Textos de la interfaz.
+
+    Estan aqui y no sueltos en el codigo Kotlin para poder revisarlos de un
+    vistazo y, el dia que haga falta, traducirlos sin tocar una sola pantalla.
+-->
+<resources>
+    <string name="app_nombre">Ludora</string>
+
+    <!-- Pestañas principales: espejo de las secciones del Ludora de escritorio -->
+    <string name="pestana_tienda">Tienda</string>
+    <string name="pestana_biblioteca">Biblioteca</string>
+    <string name="pestana_cuenta">Cuenta</string>
+
+    <!-- Biometria -->
+    <string name="biometria_titulo">Desbloquear Ludora</string>
+    <string name="biometria_subtitulo">Usa tu huella o tu cara para entrar</string>
+    <string name="biometria_cancelar">Usar contraseña</string>
+</resources>

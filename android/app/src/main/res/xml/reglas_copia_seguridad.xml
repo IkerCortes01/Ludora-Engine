@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Copia de seguridad de Android 11 y anteriores.
+
+    No se respalda NADA. Dos razones:
+
+      1. La clave del AndroidKeyStore que protege la sesion NO sale del
+         telefono y no se puede restaurar en otro. Respaldar la cuenta sin su
+         clave dejaria un archivo que no se puede abrir: peor que no tener
+         nada, porque parece que si.
+
+      2. Ludora no tiene servidor todavia. Cuando lo tenga, la cuenta se
+         recupera entrando con correo y contrasena, que es la via correcta.
+-->
+<full-backup-content>
+    <exclude domain="file" path="." />
+    <exclude domain="database" path="." />
+    <exclude domain="sharedpref" path="." />
+</full-backup-content>

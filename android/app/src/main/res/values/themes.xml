@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Tema del sistema (el de la ventana, antes de que Compose pinte nada).
+
+    Los colores de verdad los define Compose en `ui/tema/Tema.kt`. Esto solo
+    existe para que el arranque no parpadee en blanco: hereda del tema sin
+    barra de accion de Material 3 y deja que Compose dibuje por encima.
+-->
+<resources>
+    <style name="Theme.Ludora" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>

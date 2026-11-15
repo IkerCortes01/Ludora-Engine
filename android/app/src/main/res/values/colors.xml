@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Colores que necesita el sistema (icono, tema de ventana).
+    La paleta de la interfaz esta en `ui/tema/Color.kt`, en Kotlin.
+-->
+<resources>
+    <!-- Azul de la franja de menu del Ludora de escritorio. -->
+    <color name="ludora_azul">#FF1B3A8C</color>
+</resources>
