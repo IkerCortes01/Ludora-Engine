@@ -1,10 +1,8 @@
 package com.ludora.apk.ui.tema
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
@@ -12,138 +10,117 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
 /**
- * Paleta y tipografia de Ludora en el telefono.
+ * La paleta de Ludora, la MISMA del escritorio.
  *
  * ---------------------------------------------------------------------------
  * DE DONDE SALEN LOS COLORES
  * ---------------------------------------------------------------------------
- * Del Ludora de escritorio: el azul de la franja de menu y el violeta de los
- * paneles de la biblioteca. Son los dos colores que identifican la app, y
- * cambiarlos en el telefono haria que pareciesen dos productos distintos.
+ * Uno a uno de `src/ui/Theme.h` del Ludora de PC, con el mismo nombre (sin la
+ * `k`). "Negro dominante, rojo como unico acento", la franja azul del menu, el
+ * violeta de los paneles, el vino del chat y los azules de la tienda.
  *
- * Lo que NO se copia es la forma de pintar. El escritorio dibuja a mano sobre
- * un framebuffer de software con rectangulos de color plano. Aqui se usa
- * Material 3, que trae sombras, estados de pulsacion y contraste ya resueltos,
- * y que es lo que un usuario de Android espera al tocar la pantalla.
+ * Antes este archivo tenia una paleta propia de Material (claro y oscuro) y el
+ * telefono parecia otro producto. Ahora no hay esquema claro: el escritorio no
+ * lo tiene, y la app se ve igual que alli a cualquier hora.
+ *
+ * Si un color cambia en Theme.h, se cambia aqui el del mismo nombre.
  */
+object Ludora {
+    // Superficies
+    val Bg = Color(0xFF090909)            // lienzo
+    val BarBg = Color(0xFF121212)         // barra de titulo
+    val FieldBg = Color(0xFF141414)
+    val FieldBgFocus = Color(0xFF1A1010)
 
-// --- Azul de la franja de menu ---
-private val LudoraAzul = Color(0xFF1B3A8C)
-private val LudoraAzulClaro = Color(0xFF4A63B8)
-private val LudoraAzulOscuro = Color(0xFF0D2156)
+    // Acento
+    val Accent = Color(0xFFE01E23)        // rojo de marca
+    val Border = Color(0xFF8E1116)        // marco y separador
+    val FieldBorder = Color(0xFF3A0E10)
+    val LedRed = Color(0xFFFF0018)        // el bloque activo del menu
+    val DarkBlue = Color(0xFF0B1A4A)      // la franja del menu
+    val BlueDivider = Color(0xFF040A1F)   // los bloques en reposo
 
-// --- Violeta de los paneles de biblioteca ---
-private val LudoraVioleta = Color(0xFF6B3FA0)
-private val LudoraVioletaClaro = Color(0xFF9B6FD0)
+    // Paneles: violeta profundo mezclado con azul oscuro
+    val PanelViolet = Color(0xFF2B1B57)
+    val PanelDeep = Color(0xFF1A1440)
+    val PanelEdge = Color(0xFF4A3585)
+    val ScrollTrack = Color(0xFF140F30)
+    val ScrollThumb = Color(0xFF6C4FC4)
 
-// --- Rojo de las dos barras de la seccion de paneles ---
-private val LudoraRojo = Color(0xFFC0392B)
+    // Avatar de la esquina
+    val Turquoise = Color(0xFF00E5D0)
+
+    // Chat
+    val Wine = Color(0xFF5A3540)
+    val WineEdge = Color(0xFF704452)
+
+    // Tienda
+    val SteamBg = Color(0xFF1B2838)
+    val SteamPanel = Color(0xFF16202D)
+    val SteamEdge = Color(0xFF3D4E62)
+    val SteamBlue = Color(0xFF66C0F4)
+    val SteamGreen = Color(0xFFA4D007)
+    val SteamText = Color(0xFFC7D5E0)
+    val SteamDim = Color(0xFF8F98A0)
+
+    // Realces
+    val Hover = Color(0xFF3A0E10)
+    val Pressed = Color(0xFF5A1519)
+
+    // Texto
+    val Text = Color(0xFFF2F2F2)
+    val Glyph = Color(0xFFB8B8B8)
+    val Dim = Color(0xFF6E6E6E)
+    val White = Color(0xFFFFFFFF)
+    val Ok = Color(0xFF5FBF6A)
+
+    // La L del logo, de la punta al pie
+    val LogoCyan = Color(0xFF28C8F0)
+    val LogoBlue = Color(0xFF2A5CE8)
+    val LogoViolet = Color(0xFF8B2BE0)
+    val LogoMagenta = Color(0xFFE02BB4)
+    val LogoRed = Color(0xFFF02038)
+}
 
 /**
- * Esquema claro.
- *
- * Se definen los colores a mano en vez de usar el color dinamico de Android 12
- * (que tomaria el tono del fondo de pantalla del usuario): una plataforma de
- * juegos tiene identidad propia, y teñirla del fondo de pantalla la diluye.
+ * Material sigue debajo (dialogos del sistema, el interruptor), pero vestido
+ * con la paleta de Ludora: lo que no se pinta a mano tampoco desentona.
  */
-private val EsquemaClaro = lightColorScheme(
-    primary = LudoraAzul,
-    onPrimary = Color.White,
-    primaryContainer = LudoraAzulClaro,
-    onPrimaryContainer = Color.White,
-    secondary = LudoraVioleta,
-    onSecondary = Color.White,
-    secondaryContainer = LudoraVioletaClaro,
-    onSecondaryContainer = Color(0xFF1A0033),
-    tertiary = LudoraRojo,
-    onTertiary = Color.White,
-    background = Color(0xFFF7F7FA),
-    onBackground = Color(0xFF1A1A1F),
-    surface = Color.White,
-    onSurface = Color(0xFF1A1A1F),
-    surfaceVariant = Color(0xFFE8E8EF),
-    onSurfaceVariant = Color(0xFF45454F),
-    error = Color(0xFFB3261E),
-    onError = Color.White,
+private val EsquemaLudora = darkColorScheme(
+    primary = Ludora.Accent,
+    onPrimary = Ludora.White,
+    secondary = Ludora.Turquoise,
+    onSecondary = Ludora.Bg,
+    tertiary = Ludora.ScrollThumb,
+    background = Ludora.Bg,
+    onBackground = Ludora.Text,
+    surface = Ludora.BarBg,
+    onSurface = Ludora.Text,
+    surfaceVariant = Ludora.PanelViolet,
+    onSurfaceVariant = Ludora.Glyph,
+    outline = Ludora.Border,
+    error = Ludora.LedRed,
+    onError = Ludora.White,
 )
 
 /**
- * Esquema oscuro.
- *
- * No es una inversion automatica del claro: en oscuro los azules saturados
- * vibran y cansan, asi que se aclaran y se desatura el fondo. Es el mismo
- * motivo por el que Material pide esquemas separados en vez de calcular uno
- * del otro.
- */
-private val EsquemaOscuro = darkColorScheme(
-    primary = LudoraAzulClaro,
-    onPrimary = Color(0xFF00174A),
-    primaryContainer = LudoraAzulOscuro,
-    onPrimaryContainer = Color(0xFFDDE1FF),
-    secondary = LudoraVioletaClaro,
-    onSecondary = Color(0xFF2A0050),
-    secondaryContainer = Color(0xFF4A2875),
-    onSecondaryContainer = Color(0xFFEDDCFF),
-    tertiary = Color(0xFFFF8A7A),
-    onTertiary = Color(0xFF5F1410),
-    background = Color(0xFF121216),
-    onBackground = Color(0xFFE5E1E6),
-    surface = Color(0xFF1A1A1F),
-    onSurface = Color(0xFFE5E1E6),
-    surfaceVariant = Color(0xFF45454F),
-    onSurfaceVariant = Color(0xFFC7C5D0),
-    error = Color(0xFFF2B8B5),
-    onError = Color(0xFF601410),
-)
-
-/**
- * Tipografia.
- *
- * Solo se redefinen los estilos que la app usa de verdad; el resto los hereda
- * de Material. Se usa la fuente del sistema a proposito: meter una fuente
- * propia son cientos de kilobytes en el APK y un riesgo de que no tenga los
- * caracteres acentuados del espanol.
+ * Tipografia. El escritorio escribe con la fuente del sistema (Segoe UI), sin
+ * negritas y con los rotulos en mayusculas; aqui la del sistema del telefono,
+ * con los mismos pesos y la misma escala relativa.
  */
 private val TipografiaLudora = Typography(
-    headlineMedium = TextStyle(
-        fontWeight = FontWeight.Bold,
-        fontSize = 26.sp,
-        lineHeight = 32.sp,
-    ),
-    titleLarge = TextStyle(
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 20.sp,
-        lineHeight = 26.sp,
-    ),
-    titleMedium = TextStyle(
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 16.sp,
-        lineHeight = 22.sp,
-    ),
-    bodyLarge = TextStyle(
-        fontWeight = FontWeight.Normal,
-        fontSize = 16.sp,
-        lineHeight = 24.sp,
-    ),
-    bodyMedium = TextStyle(
-        fontWeight = FontWeight.Normal,
-        fontSize = 14.sp,
-        lineHeight = 20.sp,
-    ),
-    labelLarge = TextStyle(
-        fontWeight = FontWeight.Medium,
-        fontSize = 14.sp,
-        lineHeight = 20.sp,
-    ),
+    headlineMedium = TextStyle(fontWeight = FontWeight.Normal, fontSize = 22.sp, lineHeight = 28.sp),
+    titleLarge = TextStyle(fontWeight = FontWeight.Normal, fontSize = 20.sp, lineHeight = 26.sp),
+    titleMedium = TextStyle(fontWeight = FontWeight.Normal, fontSize = 16.sp, lineHeight = 22.sp),
+    bodyLarge = TextStyle(fontWeight = FontWeight.Normal, fontSize = 16.sp, lineHeight = 22.sp),
+    bodyMedium = TextStyle(fontWeight = FontWeight.Normal, fontSize = 14.sp, lineHeight = 20.sp),
+    labelLarge = TextStyle(fontWeight = FontWeight.Normal, fontSize = 13.sp, lineHeight = 18.sp),
 )
 
 @Composable
-fun TemaLudora(
-    oscuro: Boolean = isSystemInDarkTheme(),
-    contenido: @Composable () -> Unit,
-) {
+fun TemaLudora(contenido: @Composable () -> Unit) {
     MaterialTheme(
-        colorScheme = if (oscuro) EsquemaOscuro else EsquemaClaro,
+        colorScheme = EsquemaLudora,
         typography = TipografiaLudora,
         content = contenido,
     )

@@ -1,6 +1,8 @@
 package com.ludora.apk
 
+import android.graphics.Color
 import android.os.Bundle
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.getValue
@@ -40,7 +42,12 @@ class MainActivity : FragmentActivity() {
         // Dibuja detras de la barra de estado y de la de navegacion. Es lo
         // normal en Android moderno; los Scaffold de dentro ya respetan los
         // margenes para que nada quede tapado.
-        enableEdgeToEdge()
+        // Ludora es siempre oscuro, como en el PC: los iconos de las barras del
+        // sistema van en claro aunque el telefono este en tema claro.
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+        )
 
         setContent {
             TemaLudora {

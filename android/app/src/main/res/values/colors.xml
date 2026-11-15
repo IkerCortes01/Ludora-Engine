@@ -6,4 +6,6 @@
 <resources>
     <!-- Azul de la franja de menu del Ludora de escritorio. -->
     <color name="ludora_azul">#FF1B3A8C</color>
+    <!-- El negro de fondo del icono, el mismo del de PC. -->
+    <color name="ludora_icono_fondo">#FF000000</color>
 </resources>

@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Icono adaptativo: fondo azul de Ludora y la "L" encima. -->
+<!-- Icono adaptativo: el mismo de PC (Ludora icon.png), la "L" sobre negro.
+     Las imagenes las genera tools/icono_movil.py a partir del de PC. -->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <background android:drawable="@color/ludora_azul" />
-    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <background android:drawable="@color/ludora_icono_fondo" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
 </adaptive-icon>

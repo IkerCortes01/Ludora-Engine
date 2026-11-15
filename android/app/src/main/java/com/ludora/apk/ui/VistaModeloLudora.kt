@@ -80,29 +80,23 @@ data class EstadoLudora(
 )
 
 /**
- * Las tres pestanas principales.
+ * Las seis secciones, las MISMAS del escritorio y con los mismos indices
+ * (`kSectionNames` y `k...Section` de `HomeScene`):
  *
- * Espejo de las secciones del `HomeScene.h` del escritorio, con sus indices:
+ *     0 TIENDA   1 CHAT   2 BIBLIOTECA   3 COMUNIDADES
+ *     4 ESTADISTICAS & HORAS   5 CUENTA
  *
- *     escritorio                      telefono
- *     ----------------------------    -----------------------
- *     kStoreSection   = 0  Tienda     TIENDA      = 0
- *     kPanelsSection  = 2  Biblioteca BIBLIOTECA  = 1
- *     kAccountSection = 5  Cuenta     CUENTA      = 2
- *
- * Los numeros NO coinciden, y es a proposito: el escritorio tiene seis bloques
- * (con Chat y dos vacios) y aqui hay tres. Compactarlos evita una barra con
- * huecos muertos en una pantalla de telefono, donde el espacio horizontal es
- * lo que mas escasea. El orden relativo si se respeta.
- *
- * TODO(chat): el escritorio tiene `kChatSection = 1`. Aqui no esta porque el
- * chat sin servidor no tiene con quien hablar. Cuando haya servidor, entra
- * entre Biblioteca y Cuenta.
+ * Antes el telefono tenia solo tres, compactadas. Se pidio que se viera igual
+ * que en el PC, asi que estan las seis: las que alli estan vacias, aqui
+ * tambien, y lo dicen. La franja se desliza de lado para que quepan.
  */
 enum class Pestana(val indice: Int, val titulo: String) {
-    TIENDA(0, "Tienda"),
-    BIBLIOTECA(1, "Biblioteca"),
-    CUENTA(2, "Cuenta");
+    TIENDA(0, "TIENDA"),
+    CHAT(1, "CHAT"),
+    BIBLIOTECA(2, "BIBLIOTECA"),
+    COMUNIDADES(3, "COMUNIDADES"),
+    ESTADISTICAS(4, "ESTADISTICAS & HORAS"),
+    CUENTA(5, "CUENTA");
 
     companion object {
         fun de(indice: Int): Pestana = entries.firstOrNull { it.indice == indice } ?: TIENDA
@@ -535,6 +529,9 @@ class VistaModeloLudora(private val app: LudoraApp) : ViewModel() {
     private fun avisar(texto: String) {
         _estado.value = _estado.value.copy(mensaje = texto)
     }
+
+    /** Algo que la pantalla ensena igual que el PC pero aqui aun no hace nada: se dice. */
+    fun avisarPendiente(texto: String) = avisar(texto)
 
     /** La interfaz llama a esto cuando ya ensenio el mensaje. */
     fun mensajeLeido() {
