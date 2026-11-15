@@ -1680,6 +1680,8 @@ private:
     std::string m_email;        // cuenta con la sesion iniciada
 
     i32  m_section = kPanelsSection;   // seccion visible
+    /// Ultima seccion escrita en disco, para no reescribirla cada fotograma.
+    i32  m_sectionSaved = -1;
     i32  m_hovered = -1;
     i32  m_pressed = -1;
     i32  m_lastFbWidth  = 0;

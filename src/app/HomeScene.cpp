@@ -1,4 +1,5 @@
 #include "app/HomeScene.h"
+#include "app/AccountStore.h"   // dataRoot/idForEmail: donde se guarda la ubicacion
 #include "app/DemoScene.h"
 #include "app/Font5x7.h"
 #include "app/GameInstall.h"
@@ -190,6 +191,38 @@ constexpr i32 kAccDescBtn  = 96;    // boton cuadrado
 const wchar_t* kProfileFile = L"perfil.dat";
 // Biblioteca de juegos instalados.
 const wchar_t* kLibraryFile = L"biblioteca.dat";
+
+// ---------------------------------------------------------------------------
+// DONDE SE QUEDO EL USUARIO
+// ---------------------------------------------------------------------------
+/// La seccion visible se guarda en disco para que cerrar y volver a abrir
+/// devuelva al mismo sitio, en vez de empezar siempre en el mismo bloque.
+///
+/// Es POR CUENTA: dos personas en el mismo equipo no se heredan el sitio. El
+/// nombre sale de `AccountStore::idForEmail`, que ya deja solo caracteres
+/// validos para un archivo, y vive en `dataRoot()`, de modo que en modo
+/// portatil viaja en el USB con el resto de los datos.
+std::wstring ubicacionFile(const std::string& email) {
+    const std::string id = email.empty() ? std::string("invitado")
+                                         : AccountStore::idForEmail(email);
+    return AccountStore::dataRoot() + L"\\ubicacion-" +
+           std::wstring(id.begin(), id.end()) + L".dat";
+}
+
+/// Lee la ultima seccion. Devuelve -1 si no hay nada guardado todavia, que es
+/// lo que distingue "primera vez" de "volvio a entrar".
+i32 cargarUbicacion(const std::string& email) {
+    std::ifstream in(ubicacionFile(email));
+    if (!in) return -1;
+    i32 s = -1;
+    if (!(in >> s)) return -1;
+    return s;
+}
+
+void guardarUbicacion(const std::string& email, i32 seccion) {
+    std::ofstream out(ubicacionFile(email), std::ios::trunc);
+    if (out) out << seccion << "\n";
+}
 
 // Aqui vivian kVoxelExe y kVoxelDest, las rutas fijas de Voxel World. Se
 // retiraron con el juego: ataban la plataforma a un disco concreto.
@@ -471,6 +504,20 @@ HomeScene::HomeScene(std::string sessionEmail) : m_email(std::move(sessionEmail)
 void HomeScene::onEnter(Engine& engine) {
     m_titleBar.attach(engine);
 
+    // --- donde se quedo la ultima vez ---
+    //
+    // La PRIMERA vez se entra en la Tienda: es lo que hay que ver al llegar.
+    // Despues manda lo guardado, para que salir desde la Biblioteca (o de
+    // cualquier otro bloque) y volver a entrar devuelva al mismo sitio.
+    //
+    // Las subsecciones (ficha de un producto, resenas, EULA...) NO se
+    // restauran: se entra en ellas desde algun sitio, y al abrirlas en frio
+    // apareceria una ficha sin el juego cargado. Se vuelve a su bloque padre.
+    const i32 guardada = cargarUbicacion(m_email);
+    m_section = (guardada < 0) ? kStoreSection
+              : (guardada >= kBlockCount ? kStoreSection : guardada);
+    m_sectionSaved = m_section;
+
     // Perfil guardado: nombre, descripcion y foto.
     m_profileLoaded = Profile::load(kProfileFile, m_profile);
 
@@ -699,6 +746,18 @@ i32 HomeScene::blockAt(Engine& engine, i32 fbWidth, i32 lx, i32 ly) const {
 
 void HomeScene::update(Engine& engine, f64 dt) {
     Input& in = engine.input();
+
+    // --- recordar donde esta ---
+    //
+    // Se mira aqui, una vez por fotograma, y no en cada uno de los sitios que
+    // cambian m_section: son mas de veinte repartidos por el archivo, y
+    // cualquiera nuevo que se anada quedaria cubierto sin acordarse de nada.
+    // Solo se escribe cuando cambia de bloque, asi que el disco no se toca
+    // salvo al navegar.
+    if (m_section != m_sectionSaved) {
+        m_sectionSaved = m_section;
+        if (m_section < kBlockCount) guardarUbicacion(m_email, m_section);
+    }
 
     // Cerrar sesion solicitado: volver a la pantalla de acceso. Diferido con
     // queueScene porque estamos dentro del update() de esta escena.
