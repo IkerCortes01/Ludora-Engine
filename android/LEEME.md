@@ -11,7 +11,15 @@ una traduccion con sorpresas.
 
 ---
 
-## Lo primero: esto todavia no se puede compilar aqui
+## Estado al 15 nov 2026: compila
+
+Se compilo por primera vez con JDK 17, Gradle 8.9 y el SDK de Android 35
+(`gradle assembleDebug`), sin errores y sin tocar el codigo. Sale un APK de
+pruebas de unos 18 MB (`com.ludora.apk.debug`, firma de depuracion), que es el
+que ofrece la pagina de Ludora. **Sigue sin probarse en un telefono.** Lo de
+abajo se escribio antes de esa compilacion y se conserva como historia.
+
+## Lo primero (nota original): esto todavia no se puede compilar aqui
 
 **En este equipo no hay con que compilarlo.** Lo comprobe: no hay SDK de
 Android, ni Gradle, ni `adb`, ni `kotlinc`. Solo un runtime de Java 8, que no
